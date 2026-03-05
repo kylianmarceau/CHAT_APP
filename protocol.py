@@ -1,25 +1,7 @@
+
 # PROTOCOL SPECIFICATION
 
 FORMAT = 'utf-8'
-
-# Supported CONTENT-TYPE values for file transfer (matches Stage 1 spec)
-CONTENT_TYPES = {
-    ".txt":  "text/plain",
-    ".png":  "image/png",
-    ".jpg":  "image/jpeg",
-    ".jpeg": "image/jpeg",
-    ".gif":  "image/gif",
-    ".mp4":  "video/mp4",
-    ".mp3":  "audio/mpeg",
-    ".wav":  "audio/wav",
-    ".pdf":  "application/pdf",
-}
-
-def get_content_type(filename):
-    """Return the CONTENT-TYPE string for a given filename."""
-    import os
-    ext = os.path.splitext(filename)[1].lower()
-    return CONTENT_TYPES.get(ext, "application/octet-stream")
 
 def build_message(method, path, headers={}, body=""):
     """Build an HTTP-like CHAT protocol message."""
@@ -70,18 +52,14 @@ def send_message(sock, method, path, headers={}, body=""):
     msg = build_message(method, path, headers, body)
     # Send total length first (8 bytes) so receiver knows how much to read
     length = str(len(msg)).ljust(8).encode(FORMAT)
-    sock.sendall(length + msg)
+    sock.send(length + msg)
 
 
 def recv_message(sock):
     """Receive and parse a message from a socket."""
-    # Read exactly 8 bytes for the length prefix (recv may return fewer)
-    raw_len = b""
-    while len(raw_len) < 8:
-        chunk = sock.recv(8 - len(raw_len))
-        if not chunk:
-            return None
-        raw_len += chunk
+    raw_len = sock.recv(8)
+    if not raw_len:
+        return None
     total = int(raw_len.decode(FORMAT).strip())
 
     # Read exactly that many bytes
