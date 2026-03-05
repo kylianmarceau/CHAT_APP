@@ -71,3 +71,42 @@ def recv_message(sock):
         data += chunk
 
     return parse_message(data)
+
+def build_udp_packet(sender, seq, total, chunk):
+    """
+    Build a UDP packet for file transfer.
+    Header format:
+      SENDER: <name>
+      SEQ: <chunk_number>
+      TOTAL: <total_chunks>
+      LENGTH: <bytes_in_chunk>
+      (blank line)
+      <raw bytes>
+    """
+    header = (
+        f"SENDER: {sender}\r\n"
+        f"SEQ: {seq}\r\n"
+        f"TOTAL: {total}\r\n"
+        f"LENGTH: {len(chunk)}\r\n"
+        f"\r\n"
+    ).encode(FORMAT)
+    return header + chunk
+
+
+def parse_udp_packet(data):
+    """Parse a UDP file transfer packet back into a dict."""
+    if b"\r\n\r\n" in data:
+        head, chunk = data.split(b"\r\n\r\n", 1)
+    else:
+        return None
+    headers = {}
+    for line in head.decode(FORMAT).split("\r\n"):
+        if ": " in line:
+            k, v = line.split(": ", 1)
+            headers[k.upper()] = v
+    return {
+        "sender": headers.get("SENDER"),
+        "seq":    int(headers.get("SEQ", 0)),
+        "total":  int(headers.get("TOTAL", 0)),
+        "chunk":  chunk[:int(headers.get("LENGTH", 0))]
+    }
