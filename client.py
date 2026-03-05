@@ -3,7 +3,7 @@ import threading
 from protocol import send_message, recv_message
 
 PORT = 5050
-SERVER = "192.168.68.103"
+SERVER = "196.42.113.37"
 FORMAT = 'utf-8'
 ADDR = (SERVER, PORT)
 DISCONNECT_MESSAGE = "!DISCONNECTED"

@@ -4,7 +4,7 @@ from protocol import send_message, recv_message
 
 HEADER = 64
 PORT = 5050
-SERVER = "192.168.68.103"
+SERVER = "196.42.113.37"
 ADDR = (SERVER, PORT)
 FORMAT = 'utf-8'
 DISCONNECT_MESSAGE = "!DISCONNECTED"
@@ -21,12 +21,12 @@ users_lock = threading.Lock()
 def handle_client(conn, addr):
     name = None
     try:
-        #  LOGIN 
+        #  log in 
         msg = recv_message(conn)
         name = msg["headers"].get("FROM", "").lower()
         password = msg["headers"].get("PASSWORD", "")
 
-        # check credentials
+        # check credential
         if name not in users:
             send_message(conn, "CHAT/1.0", "401 ERROR", {"ERROR": "Username incorrect."})
             conn.close()
