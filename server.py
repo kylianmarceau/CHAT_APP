@@ -4,7 +4,7 @@ from protocol import send_message, recv_message
 
 HEADER = 64
 PORT = 5050
-SERVER = "192.168.120.160"
+SERVER = "192.168.68.103"
 ADDR = (SERVER, PORT)
 FORMAT = 'utf-8'
 DISCONNECT_MESSAGE = "!DISCONNECTED"
