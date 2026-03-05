@@ -1,3 +1,6 @@
+
+# PROTOCOL SPECIFICATION
+
 FORMAT = 'utf-8'
 
 def build_message(method, path, headers={}, body=""):
