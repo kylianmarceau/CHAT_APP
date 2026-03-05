@@ -11,14 +11,14 @@ DISCONNECT_MESSAGE = "!DISCONNECTED"
 client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 client.connect(ADDR)
 
-# --- LOGIN ---
+#  LOGIN 
 name = input("Enter your username: ").lower()
 password = input("Enter your password: ")
 
 send_message(client, "POST", "/login", {"FROM": name, "PASSWORD": password})
 response = recv_message(client)
 
-status = response["path"]          # e.g. "200 OK" or "401 ERROR"
+status = response["path"]         # eorrr 200=ok 401 not okau
 info = response["headers"].get("ERROR") or response["headers"].get("MESSAGE", "")
 print(f"[Server]: {info}")
 
@@ -37,13 +37,13 @@ def receive():
             method = msg["method"]
             path = msg["path"]
 
-            # Server status response error or not
+            # server status response error or not
             if method == "CHAT/1.0":
                 info = msg["headers"].get("ERROR") or msg["headers"].get("MESSAGE", "")
                 if info:
                     print(f"[Server {path}]: {info}")
 
-            # Incoming message from another user
+            # sncoming message from another user
             elif method == "POST" and path == "/message":
                 sender = msg["headers"].get("FROM", "?")
                 target = msg["headers"].get("TARGET", "")
