@@ -4,7 +4,7 @@ from protocol import send_message, recv_message
 
 HEADER = 64
 PORT = 5050
-SERVER = "196.42.116.80"
+SERVER = "192.168.120.160"
 ADDR = (SERVER, PORT)
 FORMAT = 'utf-8'
 DISCONNECT_MESSAGE = "!DISCONNECTED"
@@ -13,6 +13,7 @@ server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 server.bind(ADDR)
 
 clients = {}
+groups = {}
 
 users = {"tim": "1234", "kylian": "4567", "kp": "999"} #HARD CODE FOR NOW< DATABASE LATER ON
 users_lock = threading.Lock()
@@ -72,7 +73,40 @@ def handle_client(conn, addr):
                 else:
                     send_message(conn, "CHAT/1.0", "404 ERROR", {"ERROR": f"'{target}' is not online."})
 
-            
+            # JOIN GROUP
+            elif path == "/join":
+                if not target:
+                    send_message(conn, "CHAT/1.0", "400 ERROR", {"ERROR": "No group specified."})
+                    continue
+                if target not in groups:
+                    groups[target] = set()
+                groups[target].add(sender)
+                send_message(conn, "CHAT/1.0", "200 OK", {"MESSAGE": f"You joined group '{target}'."})
+
+            # LEAVE GROUP
+            elif path == "/leave":
+                if not target or target not in groups or sender not in groups[target]:
+                    send_message(conn, "CHAT/1.0", "400 ERROR", {"ERROR": "You are not in that group."})
+                    continue
+                groups[target].remove(sender)
+                send_message(conn, "CHAT/1.0", "200 OK", {"MESSAGE": f"You left group '{target}'."})
+
+            # GROUP MESSAGE
+            elif path == "/group-message":
+                if not target or target not in groups:
+                    send_message(conn, "CHAT/1.0", "404 ERROR", {"ERROR": f"Group '{target}' does not exist."})
+                    continue
+                if sender not in groups[target]:
+                    send_message(conn, "CHAT/1.0", "403 ERROR", {"ERROR": f"You are not a member of '{target}'."})
+                    continue
+                for member in groups[target]:
+                    if member != sender and member in clients:
+                        send_message(clients[member], "POST", "/message", {
+                            "FROM": sender,
+                            "TARGET": target,
+                            "CONTENT-TYPE": msg["headers"].get("CONTENT-TYPE", "text")
+                        }, body)
+                send_message(conn, "CHAT/1.0", "200 OK", {"MESSAGE": f"Message sent to group '{target}'."})
 
     except Exception as e:
         print(f"[ERROR] {e}")

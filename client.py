@@ -3,7 +3,7 @@ import threading
 from protocol import send_message, recv_message
 
 PORT = 5050
-SERVER = "196.42.116.80"
+SERVER = "192.168.120.160"
 FORMAT = 'utf-8'
 ADDR = (SERVER, PORT)
 DISCONNECT_MESSAGE = "!DISCONNECTED"
@@ -67,15 +67,26 @@ while True:
     if msg == DISCONNECT_MESSAGE:
         send_message(client, "POST", "/logout", {"FROM": name})
         print("[Client]: Disconnected.")
+        client.close()
         break
+
+    elif msg.startswith("/join "):
+        group_name = msg[6:].strip().lower()
+        send_message(client, "POST", "/join", {"FROM": name, "TARGET": group_name})
+
+    elif msg.startswith("/leave "):
+        group_name = msg[7:].strip().lower()
+        send_message(client, "POST", "/leave", {"FROM": name, "TARGET": group_name})
+
 
     elif ": " in msg:
         target, content = msg.split(": ", 1)
         target = target.strip().lower()
 
-        if target == "group":
+        if target.startswith("group"):
             send_message(client, "POST", "/group-message", {
                 "FROM": name,
+                "TARGET": target,
                 "CONTENT-TYPE": "text"
             }, content)
         else:
