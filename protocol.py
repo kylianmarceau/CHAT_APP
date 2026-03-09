@@ -4,7 +4,7 @@
 FORMAT = 'utf-8'
 
 def build_message(method, path, headers={}, body=""):
-    """Build an HTTP-like CHAT protocol message."""
+    
     if isinstance(body, str):
         body_bytes = body.encode(FORMAT)
     else:
