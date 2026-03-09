@@ -5,7 +5,7 @@ import threading
 from protocol import send_message, recv_message, build_udp_packet, parse_udp_packet
 
 PORT = 5050
-SERVER = "localhost"
+SERVER = "13.49.137.214"    # IP CHANGE FOR AWS SERVER WERE HOSTING ON
 FORMAT = 'utf-8'
 ADDR = (SERVER, PORT)
 DISCONNECT_MESSAGE = "!DISCONNECT"

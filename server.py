@@ -1,12 +1,13 @@
 
 # MAIN TCP SERVER 
+# CHANGED---> hosting server on aws
 
 import socket
 import threading
 from protocol import send_message, recv_message
 
 PORT = 5050
-SERVER = "localhost"
+SERVER = "0.0.0.0"  # changed to listen on all 
 ADDR = (SERVER, PORT)
 FORMAT = 'utf-8'
 
