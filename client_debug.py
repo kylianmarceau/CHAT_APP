@@ -46,13 +46,7 @@ client.connect(ADDR)
 name     = input("Enter your username: ").lower()
 password = input("Enter your password: ")
 
-# get local IP by connecting a dummy UDP socket
-_tmp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-_tmp.connect(("8.8.8.8", 80))
-LOCAL_IP = _tmp.getsockname()[0]
-_tmp.close()
-
-send_message(client, "POST", "/login", {"FROM": name, "PASSWORD": password, "UDP-PORT": UDP_PORT, "LOCAL-IP": LOCAL_IP})
+send_message(client, "POST", "/login", {"FROM": name, "PASSWORD": password, "UDP-PORT": UDP_PORT})
 
 response = recv_message(client)
 status   = response["path"]
@@ -219,7 +213,10 @@ def receive():
                 print(f"[CALL] {caller} ended the call.")
                 end_audio_call()
 
-        except Exception:
+        except Exception as e:
+            import traceback
+            print(f"[RECEIVE ERROR] {e}")
+            traceback.print_exc()
             break
 
 
