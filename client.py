@@ -2,33 +2,24 @@
 
 import socket
 import threading
-from protocol import send_message, recv_message, build_udp_packet, parse_udp_packet
+import os
+from protocol import send_message, recv_message
 
 PORT = 5050
-SERVER = "localhost"
+SERVER = "13.49.137.214"    # IP for AWS server
 FORMAT = 'utf-8'
 ADDR = (SERVER, PORT)
 DISCONNECT_MESSAGE = "!DISCONNECT"
-CHUNK_SIZE = 1024  # bytes per UDP packet
-
-
-udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-udp_sock.bind(('', 0))
-UDP_PORT = udp_sock.getsockname()[1]
-
-
-peer_udp_response = None
-peer_udp_event    = threading.Event()
 
 
 client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 client.connect(ADDR)
 
-#log in 
+# login
 name     = input("Enter your username: ").lower()
 password = input("Enter your password: ")
 
-send_message(client, "POST", "/login", {"FROM":     name, "PASSWORD": password, "UDP-PORT": UDP_PORT})
+send_message(client, "POST", "/login", {"FROM": name, "PASSWORD": password})
 
 response = recv_message(client)
 status   = response["path"]
@@ -42,104 +33,46 @@ if "ERROR" in status:
 joined_groups = set()  # track groups this client has joined
 
 
-# ── UDP FILE SEND ─────────────────────────────────────────────────────────────
-def udp_send_file(target, filepath):
-    
-    # needs signaling first before file cna send
-
-    import os, time
-
-    global peer_udp_response
-    peer_udp_event.clear()
-
-    # 1. get peer's UDP address from server
-    send_message(client, "POST", "/get-peer-udp", {"FROM": name, "TARGET": target})
-    peer_udp_event.wait(timeout=5)
-
-    response = peer_udp_response
-    if not response or "ERROR" in response["path"]:
-        print(f"[Server]: {response['headers'].get('ERROR') if response else 'No response'}")
+# FILE SEND — via TCP through server
+def tcp_send_file(target, filepath):
+    if not os.path.exists(filepath):
+        print(f"[FILE] File not found: {filepath}")
         return
 
-    peer_ip   = response["headers"].get("PEER-IP")
-    peer_port = int(response["headers"].get("PEER-PORT"))
+    filename = os.path.basename(filepath)
 
-    # 2. read and chunk the file
     with open(filepath, "rb") as f:
         data = f.read()
 
-    filename = os.path.basename(filepath)
-    chunks   = [data[i:i + CHUNK_SIZE] for i in range(0, len(data), CHUNK_SIZE)]
-    total    = len(chunks)
+    print(f"[FILE] Sending '{filename}' to {target} ({len(data)} bytes)...")
 
-    # 3. notify recipient via TCP (server
-    send_message(client, "POST", "/message", {"FROM":         name, "TARGET":       target, "CONTENT-TYPE": "file-incoming"}, f"FILE:{filename}:{total}")
+    send_message(
+        client, "POST", "/file",
+        {
+            "FROM":      name,
+            "TARGET":    target,
+            "FILE-NAME": filename,
+        },
+        data  # binary body sent over TCP
+    )
 
-    # 4. wait for recipient's UDP READY signal then can send
-    print(f"[FILE] Waiting for {target} to be ready...")
-    udp_sock.settimeout(10.0)
-    try:
-        while True:
-            data_in, _ = udp_sock.recvfrom(64)
-            if data_in == b"READY":
-                break
-    except socket.timeout:
-        print(f"[FILE] {target} did not respond in time. Aborting.")
-        udp_sock.settimeout(None)
-        return
-    udp_sock.settimeout(None)
-
-    # 5.  send all chunks directly via UDP
-    print(f"[FILE] Sending '{filename}' ({total} chunks)...")
-    for seq, chunk in enumerate(chunks):
-        packet = build_udp_packet(name, seq, total, chunk)
-        udp_sock.sendto(packet, (peer_ip, peer_port))
-        time.sleep(0.001)  # small delay to avoid packet flood
-        #should work
-
-    print(f"[FILE] Sent '{filename}' to {target} ({total} chunks).")
+    print(f"[FILE] Sent '{filename}' to {target}.")
 
 
-# UDP FILE RECEIVE 
-def udp_receive_file(sender, filename, total_chunks, sender_ip, sender_udp_port):
+# FILE RECEIVE — reassemble and save locally
+def handle_incoming_file(msg):
+    sender   = msg["headers"].get("FROM", "?")
+    filename = msg["headers"].get("FILE-NAME", "received_file")
+    data     = msg["body"]  # already complete — TCP guarantees full delivery
 
-    print(f"[FILE] Receiving '{filename}' from {sender} ({total_chunks} chunks)...")
+    save_path = f"received_{filename}"
+    with open(save_path, "wb") as f:
+        f.write(data)
 
-    # 1. tell sender we're ready via UDP
-    udp_sock.sendto(b"READY", (sender_ip, sender_udp_port))
-
-    # 2. get chunks
-    received = {}
-    udp_sock.settimeout(5.0)
-
-    while len(received) < total_chunks:
-        try:
-            data, _ = udp_sock.recvfrom(65535)
-            if data == b"READY":
-                continue  # ignore random ready signals
-            packet = parse_udp_packet(data)
-            if packet and packet["sender"] == sender:
-                received[packet["seq"]] = packet["chunk"]
-                if len(received) % 20 == 0:
-                    print(f"[FILE] Progress: {len(received)}/{total_chunks}")
-        except socket.timeout:
-            print(f"[FILE] Timed out — received {len(received)}/{total_chunks} chunks.")
-            break
-
-    udp_sock.settimeout(None)
-
-    # 3. reassemble and save
-    # going to save lcoally to folder on machine
-    if len(received) == total_chunks:
-        file_data = b"".join(received[i] for i in sorted(received))
-        with open(f"received_{filename}", "wb") as f:
-            f.write(file_data)
-        print(f"[FILE] Saved as 'received_{filename}'.")
-    else:
-        print(f"[FILE] Incomplete transfer — file not saved.")
+    print(f"[FILE] Received '{filename}' from {sender} — saved as '{save_path}'.")
 
 
-#  SERVER TCP RECEIVE LOOP
+# SERVER TCP RECEIVE LOOP
 def receive():
     while True:
         try:
@@ -150,37 +83,27 @@ def receive():
             method = msg["method"]
             path   = msg["path"]
 
-        
             if method == "CHAT/1.0":
-                
-                if "PEER-IP" in msg["headers"]:
-                    global peer_udp_response
-                    peer_udp_response = msg
-                    peer_udp_event.set()
-                else:
-                    info = msg["headers"].get("ERROR") or msg["headers"].get("MESSAGE", "")
-                    if info:
-                        print(f"[Server {path}]: {info}")
+                info = msg["headers"].get("ERROR") or msg["headers"].get("MESSAGE", "")
+                if info:
+                    print(f"[Server {path}]: {info}")
 
-            
             elif method == "POST" and path == "/message":
                 sender       = msg["headers"].get("FROM", "?")
                 target       = msg["headers"].get("TARGET", "")
                 content_type = msg["headers"].get("CONTENT-TYPE", "text")
                 body         = msg["body"].decode(FORMAT) if isinstance(msg["body"], bytes) else msg["body"]
 
-                if content_type == "file-incoming":
-                    sender_ip  = msg["headers"].get("SENDER-IP", "")
-                    sender_udp = int(msg["headers"].get("SENDER-UDP", 0))
-                    _, filename, total = body.split(":")
-                    threading.Thread(
-                        target=udp_receive_file,
-                        args=(sender, filename, int(total), sender_ip, sender_udp),
-                        daemon=True
-                    ).start()
-                else:
-                    tag = f"group:{target}" if target in joined_groups else sender
-                    print(f"[{tag}] {sender}: {body}")
+                tag = f"group:{target}" if target in joined_groups else sender
+                print(f"[{tag}] {sender}: {body}")
+
+            elif method == "POST" and path == "/file":
+                # incoming file transfer relayed by server over TCP
+                threading.Thread(
+                    target=handle_incoming_file,
+                    args=(msg,),
+                    daemon=True
+                ).start()
 
         except Exception:
             break
@@ -188,13 +111,13 @@ def receive():
 
 threading.Thread(target=receive, daemon=True).start()
 
-# print commands for clear instructions onusage 
+# print commands
 print("\nCommands:")
 print("  /join groupname          --- join or create a group")
 print("  /leave groupname         --- leave a group")
 print("  groupname: message       --- send to a group you've joined")
 print("  username: message        --- send to a user")
-print("  /file username filepath  --- send a file directly via UDP")
+print("  /file username filepath  --- send a file to a user via TCP")
 print("  !DISCONNECT            ---- logout and exit\n")
 
 while True:
@@ -224,7 +147,7 @@ while True:
         else:
             target, filepath = parts
             threading.Thread(
-                target=udp_send_file,
+                target=tcp_send_file,
                 args=(target.lower(), filepath.strip()),
                 daemon=True
             ).start()
@@ -234,11 +157,10 @@ while True:
         target = target.strip().lower()
 
         if target in joined_groups:
-            send_message(client, "POST", "/group-message", {"FROM":         name, "TARGET":       target, "CONTENT-TYPE": "text"}, content)
+            send_message(client, "POST", "/group-message",
+                         {"FROM": name, "TARGET": target, "CONTENT-TYPE": "text"}, content)
         else:
-            send_message(client, "POST", "/message", {"FROM":         name,"TARGET":       target,"CONTENT-TYPE": "text"}, content)
+            send_message(client, "POST", "/message",
+                         {"FROM": name, "TARGET": target, "CONTENT-TYPE": "text"}, content)
     else:
         print("Format:  username: message   or   groupname: message")
-
-
-# client file too long, fine for prototype, cld split up for final. probaly better
