@@ -62,4 +62,3 @@ def recv_message(sock):
         data += chunk
 
     return parse_message(data)
-
