@@ -1,14 +1,14 @@
-
 # PROTOCOL SPECIFICATION
+# TCP is used for all client-server communication (text, files, signalling)
+# UDP is used only for peer-to-peer real-time audio calls
 
 FORMAT = 'utf-8'
 
 def build_message(method, path, headers={}, body=""):
-    """Build an HTTP-like CHAT protocol message."""
     if isinstance(body, str):
         body_bytes = body.encode(FORMAT)
     else:
-        body_bytes = body  # already bytes (for files/images)
+        body_bytes = body
 
     start_line = f"{method} {path} CHAT/1.0\r\n"
     headers["CONTENT-LENGTH"] = len(body_bytes)
@@ -20,7 +20,6 @@ def build_message(method, path, headers={}, body=""):
 
 
 def parse_message(raw_bytes):
-    """Parse a raw CHAT protocol message into a dict."""
     if b"\r\n\r\n" in raw_bytes:
         head, body = raw_bytes.split(b"\r\n\r\n", 1)
     else:
@@ -40,29 +39,25 @@ def parse_message(raw_bytes):
     body = body[:content_length]
 
     return {
-        "method": start_line[0] if len(start_line) > 1 else "",
-        "path": start_line[1] if len(start_line) > 1 else start_line[0],
+        "method":  start_line[0] if len(start_line) > 1 else "",
+        "path":    start_line[1] if len(start_line) > 1 else start_line[0],
         "headers": headers,
-        "body": body
+        "body":    body
     }
 
 
 def send_message(sock, method, path, headers={}, body=""):
-    """Build and send a message over a socket."""
     msg = build_message(method, path, headers, body)
-    # Send total length first (8 bytes) so receiver knows how much to read
     length = str(len(msg)).ljust(8).encode(FORMAT)
     sock.send(length + msg)
 
 
 def recv_message(sock):
-    """Receive and parse a message from a socket."""
     raw_len = sock.recv(8)
     if not raw_len:
         return None
     total = int(raw_len.decode(FORMAT).strip())
 
-    # Read exactly that many bytes
     data = b""
     while len(data) < total:
         chunk = sock.recv(total - len(data))
@@ -71,3 +66,34 @@ def recv_message(sock):
         data += chunk
 
     return parse_message(data)
+
+
+# ── UDP audio packet helpers (P2P calls only) ─────────────────────────────────
+
+def build_audio_packet(sender, seq, chunk):
+    """Build a UDP packet carrying one raw audio chunk."""
+    header = (
+        f"SENDER: {sender}\r\n"
+        f"SEQ: {seq}\r\n"
+        f"LENGTH: {len(chunk)}\r\n"
+        f"\r\n"
+    ).encode(FORMAT)
+    return header + chunk
+
+
+def parse_audio_packet(data):
+    """Parse an incoming UDP audio packet. Returns dict or None on failure."""
+    if b"\r\n\r\n" not in data:
+        return None
+    head, chunk = data.split(b"\r\n\r\n", 1)
+    headers = {}
+    for line in head.decode(FORMAT).split("\r\n"):
+        if ": " in line:
+            k, v = line.split(": ", 1)
+            headers[k.upper()] = v
+    length = int(headers.get("LENGTH", 0))
+    return {
+        "sender": headers.get("SENDER"),
+        "seq":    int(headers.get("SEQ", 0)),
+        "chunk":  chunk[:length]
+    }

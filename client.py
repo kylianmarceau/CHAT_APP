@@ -1,33 +1,163 @@
+# CLIENT
+# TCP for all messaging, file transfer, and call signalling (via server)
+# UDP P2P for real-time audio during calls
+
 import socket
 import threading
-from protocol import send_message, recv_message
+import os
 
-PORT = 5050
-SERVER = "196.42.113.37"
-FORMAT = 'utf-8'
-ADDR = (SERVER, PORT)
-DISCONNECT_MESSAGE = "!DISCONNECTED"
+from protocol import (
+    send_message, recv_message,
+    build_audio_packet, parse_audio_packet
+)
 
+# ── Config ────────────────────────────────────────────────────────────────────
+PORT               = 5050
+SERVER             = "13.49.137.214"   # AWS server IP
+FORMAT             = 'utf-8'
+ADDR               = (SERVER, PORT)
+DISCONNECT_MESSAGE = "!DISCONNECT"
+
+# Audio settings (requires pyaudio — install with: pip install pyaudio)
+CHUNK       = 1024   # audio frames per UDP packet
+RATE        = 44100  # sample rate Hz
+CHANNELS    = 1      # mono
+AUDIO_FMT   = None   # set after pyaudio import
+
+try:
+    import pyaudio
+    AUDIO_FMT = pyaudio.paInt16
+    audio = pyaudio.PyAudio()
+    AUDIO_AVAILABLE = True
+except ImportError:
+    print("[WARN] pyaudio not installed — audio calls unavailable. Run: pip install pyaudio")
+    AUDIO_AVAILABLE = False
+
+# ── UDP socket (for audio P2P) ────────────────────────────────────────────────
+udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+udp_sock.bind(('', 0))
+UDP_PORT = udp_sock.getsockname()[1]
+
+# ── TCP socket ────────────────────────────────────────────────────────────────
 client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 client.connect(ADDR)
 
-#  LOGIN 
-name = input("Enter your username: ").lower()
+# ── Login ─────────────────────────────────────────────────────────────────────
+name     = input("Enter your username: ").lower()
 password = input("Enter your password: ")
 
-send_message(client, "POST", "/login", {"FROM": name, "PASSWORD": password})
-response = recv_message(client)
+# get local IP by connecting a dummy UDP socket
+_tmp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+_tmp.connect(("8.8.8.8", 80))
+LOCAL_IP = _tmp.getsockname()[0]
+_tmp.close()
 
-status = response["path"]
-info = response["headers"].get("ERROR") or response["headers"].get("MESSAGE", "")
+send_message(client, "POST", "/login", {"FROM": name, "PASSWORD": password, "UDP-PORT": UDP_PORT, "LOCAL-IP": LOCAL_IP})
+
+response = recv_message(client)
+status   = response["path"]
+info     = response["headers"].get("ERROR") or response["headers"].get("MESSAGE", "")
 print(f"[Server]: {info}")
 
 if "ERROR" in status:
     client.close()
     exit()
 
-joined_groups = set()  # track groups this client has joined
+joined_groups = set()
 
+# Call state
+in_call        = False
+call_peer_addr = None   # (ip, udp_port) of the other side
+call_stop      = threading.Event()
+pending_call   = None   # (caller, caller_ip, caller_udp) of an incoming call
+
+
+# ── FILE TRANSFER (TCP via server) ────────────────────────────────────────────
+
+def tcp_send_file(target, filepath):
+    if not os.path.exists(filepath):
+        print(f"[FILE] File not found: {filepath}")
+        return
+    filename = os.path.basename(filepath)
+    with open(filepath, "rb") as f:
+        data = f.read()
+    print(f"[FILE] Sending '{filename}' to {target} ({len(data)} bytes)...")
+    send_message(client, "POST", "/file",
+                 {"FROM": name, "TARGET": target, "FILE-NAME": filename}, data)
+    print(f"[FILE] Sent '{filename}' to {target}.")
+
+
+def handle_incoming_file(msg):
+    sender   = msg["headers"].get("FROM", "?")
+    filename = msg["headers"].get("FILE-NAME", "received_file")
+    data     = msg["body"]
+    save_path = f"received_{filename}"
+    with open(save_path, "wb") as f:
+        f.write(data)
+    print(f"[FILE] Received '{filename}' from {sender} — saved as '{save_path}'.")
+
+
+# ── AUDIO CALL (UDP P2P) ──────────────────────────────────────────────────────
+
+def audio_send_loop(peer_ip, peer_udp):
+    """Capture mic and stream audio chunks via UDP directly to peer."""
+    stream = audio.open(format=AUDIO_FMT, channels=CHANNELS,
+                        rate=RATE, input=True, frames_per_buffer=CHUNK)
+    seq = 0
+    print("[CALL] Streaming audio...")
+    while not call_stop.is_set():
+        try:
+            chunk = stream.read(CHUNK, exception_on_overflow=False)
+            packet = build_audio_packet(name, seq, chunk)
+            udp_sock.sendto(packet, (peer_ip, peer_udp))
+            seq += 1
+        except Exception:
+            break
+    stream.stop_stream()
+    stream.close()
+
+
+def audio_recv_loop():
+    """Receive UDP audio chunks from peer and play them."""
+    stream = audio.open(format=AUDIO_FMT, channels=CHANNELS,
+                        rate=RATE, output=True, frames_per_buffer=CHUNK)
+    udp_sock.settimeout(1.0)
+    print("[CALL] Receiving audio...")
+    while not call_stop.is_set():
+        try:
+            data, _ = udp_sock.recvfrom(65535)
+            packet = parse_audio_packet(data)
+            if packet:
+                stream.write(packet["chunk"])
+        except socket.timeout:
+            continue
+        except Exception:
+            break
+    udp_sock.settimeout(None)
+    stream.stop_stream()
+    stream.close()
+
+
+def start_audio_call(peer_ip, peer_udp):
+    """Start send and receive threads for the audio call."""
+    global in_call, call_peer_addr
+    in_call        = True
+    call_peer_addr = (peer_ip, peer_udp)
+    call_stop.clear()
+    threading.Thread(target=audio_send_loop, args=(peer_ip, peer_udp), daemon=True).start()
+    threading.Thread(target=audio_recv_loop, daemon=True).start()
+
+
+def end_audio_call():
+    """Stop audio threads."""
+    global in_call, call_peer_addr
+    call_stop.set()
+    in_call        = False
+    call_peer_addr = None
+    print("[CALL] Call ended.")
+
+
+# ── TCP RECEIVE LOOP ──────────────────────────────────────────────────────────
 
 def receive():
     while True:
@@ -37,34 +167,77 @@ def receive():
                 break
 
             method = msg["method"]
-            path = msg["path"]
+            path   = msg["path"]
 
-            # server status response
+            # Server status / control response
             if method == "CHAT/1.0":
                 info = msg["headers"].get("ERROR") or msg["headers"].get("MESSAGE", "")
-                if info:
+
+                # Caller receives peer UDP details after /call is accepted
+                if "PEER-IP" in msg["headers"] and "PEER-UDP" in msg["headers"] and not in_call:
+                    peer_ip  = msg["headers"]["PEER-IP"]
+                    peer_udp = int(msg["headers"]["PEER-UDP"])
+                    print(f"[CALL] Call connected. Starting audio...")
+                    if AUDIO_AVAILABLE:
+                        start_audio_call(peer_ip, peer_udp)
+
+                elif info:
                     print(f"[Server {path}]: {info}")
 
-            # incoming message from another user
+            # Incoming text message
             elif method == "POST" and path == "/message":
-                sender = msg["headers"].get("FROM", "?")
-                target = msg["headers"].get("TARGET", "")
-                body = msg["body"].decode(FORMAT) if isinstance(msg["body"], bytes) else msg["body"]
+                sender       = msg["headers"].get("FROM", "?")
+                target       = msg["headers"].get("TARGET", "")
+                body         = msg["body"].decode(FORMAT) if isinstance(msg["body"], bytes) else msg["body"]
                 tag = f"group:{target}" if target in joined_groups else sender
                 print(f"[{tag}] {sender}: {body}")
 
-        except Exception as e:
+            # Incoming file
+            elif method == "POST" and path == "/file":
+                threading.Thread(target=handle_incoming_file, args=(msg,), daemon=True).start()
+
+            # Incoming call request — ask user to accept or reject
+            elif method == "POST" and path == "/call":
+                caller     = msg["headers"].get("FROM", "?")
+                caller_ip  = msg["headers"].get("CALLER-IP")
+                caller_udp = int(msg["headers"].get("CALLER-UDP", 0))
+                print(f"\n[CALL] Incoming call from {caller}. Type '/accept {caller}' or '/reject {caller}'.")
+                global pending_call
+                pending_call = (caller, caller_ip, caller_udp)
+
+            # Call accepted by the target — caller starts audio
+            elif method == "POST" and path == "/call-accept":
+                peer_ip  = msg["headers"].get("PEER-IP")
+                peer_udp = int(msg["headers"].get("PEER-UDP", 0))
+                print(f"[CALL] Call accepted. Starting audio...")
+                if AUDIO_AVAILABLE:
+                    start_audio_call(peer_ip, peer_udp)
+
+            # Remote peer ended the call
+            elif method == "POST" and path == "/endcall":
+                caller = msg["headers"].get("FROM", "?")
+                print(f"[CALL] {caller} ended the call.")
+                end_audio_call()
+
+        except Exception:
             break
 
 
 threading.Thread(target=receive, daemon=True).start()
 
+# ── COMMAND INTERFACE ─────────────────────────────────────────────────────────
+
 print("\nCommands:")
-print("  /join groupname       → join or create a group")
-print("  /leave groupname      → leave a group")
-print("  groupname: message    → send to a group you've joined")
-print("  username: message     → send to a user")
-print("  !DISCONNECTED         → logout and exit\n")
+print("  /join groupname           --- join or create a group")
+print("  /leave groupname          --- leave a group")
+print("  groupname: message        --- send to a group you've joined")
+print("  username: message         --- send to a user")
+print("  /file username filepath   --- send a file via TCP")
+print("  /call username            --- start an audio call (UDP P2P)")
+print("  /accept username          --- accept an incoming call")
+print("  /reject username          --- reject an incoming call")
+print("  /endcall username         --- end an ongoing call")
+print("  !DISCONNECT               --- logout and exit\n")
 
 while True:
     msg = input()
@@ -85,21 +258,57 @@ while True:
         send_message(client, "POST", "/leave", {"FROM": name, "TARGET": group_name})
         joined_groups.discard(group_name)
 
+    elif msg.startswith("/file "):
+        parts = msg[6:].strip().split(" ", 1)
+        if len(parts) != 2:
+            print("Usage: /file username filepath")
+        else:
+            target, filepath = parts
+            threading.Thread(target=tcp_send_file,
+                             args=(target.lower(), filepath.strip()), daemon=True).start()
+
+    elif msg.startswith("/call "):
+        target = msg[6:].strip().lower()
+        if not AUDIO_AVAILABLE:
+            print("[CALL] pyaudio not installed — cannot make calls.")
+        elif in_call:
+            print("[CALL] Already in a call.")
+        else:
+            send_message(client, "POST", "/call", {"FROM": name, "TARGET": target})
+            print(f"[CALL] Calling {target}... waiting for them to accept.")
+
+    elif msg.startswith("/accept "):
+        caller = msg[8:].strip().lower()
+        if pending_call and pending_call[0] == caller:
+            _, caller_ip, caller_udp = pending_call
+            send_message(client, "POST", "/call-accept", {"FROM": name, "TARGET": caller})
+            print(f"[CALL] Accepted call from {caller}. Starting audio...")
+            if AUDIO_AVAILABLE:
+                start_audio_call(caller_ip, caller_udp)
+            pending_call = None
+        else:
+            print(f"[CALL] No incoming call from {caller}.")
+
+    elif msg.startswith("/reject "):
+        caller = msg[8:].strip().lower()
+        send_message(client, "POST", "/endcall", {"FROM": name, "TARGET": caller})
+        pending_call = None
+        print(f"[CALL] Rejected call from {caller}.")
+
+    elif msg.startswith("/endcall "):
+        target = msg[9:].strip().lower()
+        send_message(client, "POST", "/endcall", {"FROM": name, "TARGET": target})
+        end_audio_call()
+
     elif ": " in msg:
         target, content = msg.split(": ", 1)
         target = target.strip().lower()
-
         if target in joined_groups:
-            send_message(client, "POST", "/group-message", {
-                "FROM": name,
-                "TARGET": target,
-                "CONTENT-TYPE": "text"
-            }, content)
+            send_message(client, "POST", "/group-message",
+                         {"FROM": name, "TARGET": target, "CONTENT-TYPE": "text"}, content)
         else:
-            send_message(client, "POST", "/message", {
-                "FROM": name,
-                "TARGET": target,
-                "CONTENT-TYPE": "text"
-            }, content)
+            send_message(client, "POST", "/message",
+                         {"FROM": name, "TARGET": target, "CONTENT-TYPE": "text"}, content)
+
     else:
         print("Format:  username: message   or   groupname: message")
