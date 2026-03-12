@@ -15,7 +15,7 @@ server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 server.bind(ADDR)
 
 clients          = {}   # name -> TCP connection
-client_udp_ports = {}   # name -> UDP port (for audio calls)
+client_udp_ports = {}   # name -> UDP port for audio calls
 client_local_ips = {}   # name -> local IP (for same-network UDP P2P)
 groups           = {}   # group name -> set of member names
 
