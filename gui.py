@@ -12,7 +12,7 @@ except ImportError:
     PIL_AVAILABLE = False
 
 # ── Network / Audio ───────────────────────────────────────────────────────────
-PORT, SERVER, FORMAT = 5050, "13.49.137.214", "utf-8"
+PORT, SERVER, FORMAT = 5050, "127.0.0.1", "utf-8"
 
 CHUNK = 1024; RATE = 44100; CHANNELS = 1
 try:
@@ -87,71 +87,128 @@ def icon_lbl(parent, text, cmd, size=19):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  LOGIN
+#  LOGIN / REGISTER
 # ══════════════════════════════════════════════════════════════════════════════
 
 class LoginScreen(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("Instagram"); self.result = None
+        self.title("ChatApp"); self.result = None
         sh = self.winfo_screenheight()
         h = int(sh * 0.82); w = int(h * 9 / 16)
         self.geometry(f"{w}x{h}"); self.resizable(False, False)
         self.configure(bg=BG)
         self.protocol("WM_DELETE_WINDOW", self.destroy)
+        self._mode = "login"   # "login" or "register"
+        self._build()
+
+    # ── Build / rebuild UI ────────────────────────────────────────────────────
+    def _build(self):
+        for w in self.winfo_children(): w.destroy()
+
+        is_reg = self._mode == "register"
 
         # Logo
-        logo = tk.Frame(self, bg=BG); logo.pack(pady=(70,0))
+        logo = tk.Frame(self, bg=BG); logo.pack(pady=(50 if is_reg else 70, 0))
         c = tk.Canvas(logo, width=60, height=60, bg=BG, highlightthickness=0); c.pack()
-        for i in range(30,0,-1):
-            t = i/30
-            c.create_oval(30-i,30-i,30+i,30+i,
-                          fill=f"#{int(240*t+131*(1-t)):02x}{int(148*t+58*(1-t)):02x}{int(51*t+180*(1-t)):02x}", outline="")
-        c.create_text(30, 30, text="✦", font=F(22,True), fill="white")
-        tk.Label(logo, text="ChatApp", font=F(20,True), fg=TEXT, bg=BG).pack(pady=(10,0))
+        for i in range(30, 0, -1):
+            t = i / 30
+            c.create_oval(30-i, 30-i, 30+i, 30+i,
+                          fill=f"#{int(240*t+131*(1-t)):02x}{int(148*t+58*(1-t)):02x}{int(51*t+180*(1-t)):02x}",
+                          outline="")
+        c.create_text(30, 30, text="✦", font=F(22, True), fill="white")
+        tk.Label(logo, text="ChatApp", font=F(20, True), fg=TEXT, bg=BG).pack(pady=(10, 0))
+        tk.Label(logo,
+                 text="Create an account" if is_reg else "Sign in to continue",
+                 font=F(11), fg=TEXT_SUB, bg=BG).pack(pady=(4, 0))
 
         # Form
-        form = tk.Frame(self, bg=BG); form.pack(fill="x", padx=40, pady=30)
-        uf, self.u = pill_entry(form, "Username"); uf.pack(fill="x", pady=(0,10))
-        pf, self.p = pill_entry(form, "Password"); pf.pack(fill="x", pady=(0,16))
-        self.p.config(show="")
-        self.p.bind("<FocusIn>",  lambda _: (self.p.delete(0,"end"), self.p.config(fg=TEXT, show="●")) if self.p.get()=="Password" else None)
-        self.p.bind("<FocusOut>", lambda _: (self.p.config(show=""), self.p.insert(0,"Password"), self.p.config(fg=TEXT_SUB)) if not self.p.get() else None)
+        form = tk.Frame(self, bg=BG); form.pack(fill="x", padx=40, pady=24)
+        uf, self.u = pill_entry(form, "Username"); uf.pack(fill="x", pady=(0, 10))
 
-        tk.Button(form, text="Log in", font=F(14,True), fg="white", bg=BLUE,
+        pf, self.p = pill_entry(form, "Password"); pf.pack(fill="x", pady=(0, 10 if is_reg else 16))
+        self.p.config(show="")
+        self.p.bind("<FocusIn>",  lambda _: (self.p.delete(0, "end"), self.p.config(fg=TEXT, show="●")) if self.p.get() == "Password" else None)
+        self.p.bind("<FocusOut>", lambda _: (self.p.config(show=""), self.p.insert(0, "Password"), self.p.config(fg=TEXT_SUB)) if not self.p.get() else None)
+
+        # Confirm password — only shown in register mode
+        self.c2 = None
+        if is_reg:
+            cf, self.c2 = pill_entry(form, "Confirm password"); cf.pack(fill="x", pady=(0, 16))
+            self.c2.config(show="")
+            self.c2.bind("<FocusIn>",  lambda _: (self.c2.delete(0, "end"), self.c2.config(fg=TEXT, show="●")) if self.c2.get() == "Confirm password" else None)
+            self.c2.bind("<FocusOut>", lambda _: (self.c2.config(show=""), self.c2.insert(0, "Confirm password"), self.c2.config(fg=TEXT_SUB)) if not self.c2.get() else None)
+
+        # Primary action button
+        btn_text = "Create account" if is_reg else "Log in"
+        btn_cmd  = self._try_register if is_reg else self._try_login
+        tk.Button(form, text=btn_text, font=F(14, True), fg="white", bg=BLUE,
                   activebackground="#2d86d9", activeforeground="white",
                   relief="flat", bd=0, cursor="hand2", pady=11,
-                  command=self._try_login).pack(fill="x", pady=(0,12))
+                  command=btn_cmd).pack(fill="x", pady=(0, 12))
 
-        d = tk.Frame(form, bg=BG); d.pack(fill="x", pady=(0,10))
+        # OR divider
+        d = tk.Frame(form, bg=BG); d.pack(fill="x", pady=(0, 10))
         tk.Frame(d, bg=DIVIDER, height=1).pack(side="left", fill="x", expand=True, pady=7)
         tk.Label(d, text="  OR  ", font=F(12), fg=TEXT_SUB, bg=BG).pack(side="left")
         tk.Frame(d, bg=DIVIDER, height=1).pack(side="left", fill="x", expand=True, pady=7)
 
+        # Toggle link
+        switch_text = "Already have an account?  Log in" if is_reg else "Don't have an account?  Sign up"
+        switch_lbl  = tk.Label(form, text=switch_text, font=F(12), fg=BLUE, bg=BG, cursor="hand2")
+        switch_lbl.pack(pady=(0, 6))
+        switch_lbl.bind("<Button-1>", lambda _: self._toggle_mode())
+
+        # Error label
         self.err = tk.StringVar()
-        tk.Label(form, textvariable=self.err, font=F(12), fg=PINK, bg=BG).pack()
-        self.p.bind("<Return>", lambda _: self._try_login())
+        tk.Label(form, textvariable=self.err, font=F(12), fg=PINK, bg=BG, wraplength=260).pack()
+
+        # Keyboard shortcut
+        last_entry = self.c2 if is_reg else self.p
+        last_entry.bind("<Return>", lambda _: btn_cmd())
         self.u.focus_set()
 
-    def _try_login(self):
-        name, pw = self.u.get().strip().lower(), self.p.get().strip()
-        if not name or name=="username" or not pw or pw=="password":
-            self.err.set("Please fill in all fields."); return
+    def _toggle_mode(self):
+        self._mode = "register" if self._mode == "login" else "login"
+        self._build()
+
+    # ── Shared connection helper ──────────────────────────────────────────────
+    def _connect_and_send(self, name, pw, action):
         try:
             conn = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             conn.connect((SERVER, PORT))
-        except: self.err.set("Can't reach server."); return
-        udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); udp.bind(("",0))
+        except:
+            self.err.set("Can't reach server."); return
+        udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); udp.bind(("", 0))
         udp_port = udp.getsockname()[1]
-        tmp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); tmp.connect(("8.8.8.8",80))
+        tmp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); tmp.connect(("8.8.8.8", 80))
         local_ip = tmp.getsockname()[0]; tmp.close()
-        send_message(conn,"POST","/login",{"FROM":name,"PASSWORD":pw,"UDP-PORT":udp_port,"LOCAL-IP":local_ip})
+        send_message(conn, "POST", action,
+                     {"FROM": name, "PASSWORD": pw, "UDP-PORT": udp_port, "LOCAL-IP": local_ip})
         resp = recv_message(conn)
-        if not resp or not str(resp.get("path","")).upper().startswith("200"):
-            self.err.set((resp or {}).get("headers",{}).get("ERROR","Login failed.") if resp else "No response.")
+        if not resp or not str(resp.get("path", "")).upper().startswith("200"):
+            self.err.set((resp or {}).get("headers", {}).get("ERROR", f"{action[1:].capitalize()} failed.") if resp else "No response.")
             conn.close(); return
         self.result = (name, conn, udp, udp_port, local_ip)
         self.destroy()
+
+    def _try_login(self):
+        name, pw = self.u.get().strip().lower(), self.p.get().strip()
+        if not name or name == "username" or not pw or pw == "password":
+            self.err.set("Please fill in all fields."); return
+        self._connect_and_send(name, pw, "/login")
+
+    def _try_register(self):
+        name = self.u.get().strip().lower()
+        pw   = self.p.get().strip()
+        pw2  = self.c2.get().strip() if self.c2 else ""
+        if not name or name == "username" or not pw or pw == "password":
+            self.err.set("Please fill in all fields."); return
+        if not pw2 or pw2 == "confirm password":
+            self.err.set("Please confirm your password."); return
+        if pw != pw2:
+            self.err.set("Passwords do not match."); return
+        self._connect_and_send(name, pw, "/register")
 
 
 # ══════════════════════════════════════════════════════════════════════════════

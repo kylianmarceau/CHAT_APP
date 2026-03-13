@@ -13,7 +13,7 @@ from protocol import (
 
 # ── Config ────────────────────────────────────────────────────────────────────
 PORT               = 5050
-SERVER             = "13.49.137.214"   # AWS server IP
+SERVER             = "127.0.0.1"   # AWS server IP
 FORMAT             = 'utf-8'
 ADDR               = (SERVER, PORT)
 DISCONNECT_MESSAGE = "!DISCONNECT"
@@ -42,9 +42,23 @@ UDP_PORT = udp_sock.getsockname()[1]
 client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 client.connect(ADDR)
 
-# ── Login ─────────────────────────────────────────────────────────────────────
-name     = input("Enter your username: ").lower()
-password = input("Enter your password: ")
+# ── Login / Register ─────────────────────────────────────────────────────────
+print("Are you a new user or an existing user?")
+print("  1. Login")
+print("  2. Register")
+choice = input("Enter 1 or 2: ").strip()
+while choice not in ("1", "2"):
+    choice = input("Please enter 1 (Login) or 2 (Register): ").strip()
+
+action   = "/login" if choice == "1" else "/register"
+name     = input("Enter your username: ").lower().strip()
+password = input("Enter your password: ").strip()
+if action == "/register":
+    confirm = input("Confirm your password: ").strip()
+    if password != confirm:
+        print("[Error] Passwords do not match. Exiting.")
+        client.close()
+        exit()
 
 # get local IP by connecting a dummy UDP socket
 _tmp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -52,7 +66,7 @@ _tmp.connect(("8.8.8.8", 80))
 LOCAL_IP = _tmp.getsockname()[0]
 _tmp.close()
 
-send_message(client, "POST", "/login", {"FROM": name, "PASSWORD": password, "UDP-PORT": UDP_PORT, "LOCAL-IP": LOCAL_IP})
+send_message(client, "POST", action, {"FROM": name, "PASSWORD": password, "UDP-PORT": UDP_PORT, "LOCAL-IP": LOCAL_IP})
 
 response = recv_message(client)
 status   = response["path"]

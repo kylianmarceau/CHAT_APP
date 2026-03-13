@@ -7,7 +7,7 @@ import threading
 from protocol import send_message, recv_message
 
 PORT   = 5050
-SERVER = "0.0.0.0"
+SERVER = "127.0.0.1"
 ADDR   = (SERVER, PORT)
 FORMAT = 'utf-8'
 
@@ -25,19 +25,35 @@ users = {"tim": "1234", "kylian": "4567", "kp": "999"}  # hardcoded, replace wit
 def handle_client(conn, addr):
     name = None
     try:
-        # ── Authentication ────────────────────────────────────────────────────
+        # ── Authentication / Registration ─────────────────────────────────────
         msg      = recv_message(conn)
+        action   = msg["path"]          # "/login" or "/register"
         name     = msg["headers"].get("FROM", "").lower()
         password = msg["headers"].get("PASSWORD", "")
 
-        if name not in users:
-            send_message(conn, "CHAT/1.0", "401 ERROR", {"ERROR": "Username incorrect."})
-            conn.close()
-            return
-        if users[name] != password:
-            send_message(conn, "CHAT/1.0", "401 ERROR", {"ERROR": "Password incorrect."})
-            conn.close()
-            return
+        if action == "/register":
+            if not name or not password:
+                send_message(conn, "CHAT/1.0", "400 ERROR", {"ERROR": "Username and password required."})
+                conn.close()
+                return
+            if name in users:
+                send_message(conn, "CHAT/1.0", "409 ERROR", {"ERROR": "Username already taken."})
+                conn.close()
+                return
+            users[name] = password
+            print(f"[REGISTER] New user registered: {name}")
+            # fall through — registration succeeded, continue to connect them
+
+        else:  # "/login"
+            if name not in users:
+                send_message(conn, "CHAT/1.0", "401 ERROR", {"ERROR": "Username not found."})
+                conn.close()
+                return
+            if users[name] != password:
+                send_message(conn, "CHAT/1.0", "401 ERROR", {"ERROR": "Password incorrect."})
+                conn.close()
+                return
+
         if name in clients:
             send_message(conn, "CHAT/1.0", "409 ERROR", {"ERROR": "User already logged in."})
             conn.close()
@@ -47,7 +63,8 @@ def handle_client(conn, addr):
         client_udp_ports[name]  = msg["headers"].get("UDP-PORT", "")
         client_local_ips[name]  = msg["headers"].get("LOCAL-IP", conn.getpeername()[0])
         print(f"[+] {name} connected from {addr}")
-        send_message(conn, "CHAT/1.0", "200 OK", {"MESSAGE": f"Welcome {name}! Login successful."})
+        welcome = f"Account created! Welcome, {name}." if action == "/register" else f"Welcome back, {name}!"
+        send_message(conn, "CHAT/1.0", "200 OK", {"MESSAGE": welcome})
 
         # ── Main message loop ─────────────────────────────────────────────────
         while True:
