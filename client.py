@@ -5,6 +5,7 @@
 import socket
 import threading
 import os
+import json
 
 from protocol import (
     send_message, recv_message,
@@ -156,6 +157,57 @@ def end_audio_call():
     call_peer_addr = None
     print("[CALL] Call ended.")
 
+# ── ADDITION: History helpers (called by UI when contact is clicked) ──────────
+ 
+def load_conversation(target):
+    """
+    Request message history with a user from the server.
+    Send a /history request and wait for the JSON response.
+    Returns a list of message dicts, oldest first:
+      [{ "sender", "target", "content", "msg_type", "sent_at" }, ...]
+    """
+    send_message(client, "POST", "/history", {"FROM": name, "TARGET": target})
+    response = recv_message(client)
+    if response and "200" in response["path"]:
+        body = response["body"]
+        if isinstance(body, bytes):
+            body = body.decode(FORMAT)
+        return json.loads(body) if body else []
+    return []
+ 
+ 
+def load_group_conversation(group_name):
+    """
+    Request message history for a group from the server.
+    Send a /group-history request and wait for the JSON response.
+    Returns a list of message dicts, oldest first:
+      [{ "sender", "target", "content", "msg_type", "sent_at" }, ...]
+    """
+    send_message(client, "POST", "/group-history", {"FROM": name, "TARGET": group_name})
+    response = recv_message(client)
+    if response and "200" in response["path"]:
+        body = response["body"]
+        if isinstance(body, bytes):
+            body = body.decode(FORMAT)
+        return json.loads(body) if body else []
+    return []
+ 
+ 
+def load_recent_contacts():
+    """
+    Request the sidebar contact list from the server.
+    Send a /contacts request and wait for the JSON response.
+    Returns a list of usernames ordered by most recent message:
+      ["kylian", "kp", ...]
+    """
+    send_message(client, "POST", "/contacts", {"FROM": name})
+    response = recv_message(client)
+    if response and "200" in response["path"]:
+        body = response["body"]
+        if isinstance(body, bytes):
+            body = body.decode(FORMAT)
+        return json.loads(body) if body else []
+    return []
 
 # ── TCP RECEIVE LOOP ──────────────────────────────────────────────────────────
 
@@ -230,6 +282,9 @@ threading.Thread(target=receive, daemon=True).start()
 print("\nCommands:")
 print("  /join groupname           --- join or create a group")
 print("  /leave groupname          --- leave a group")
+print("  /history username         --- load chat history with a user")
+print("  /ghistory groupname       --- load chat history for a group")
+print("  /contacts                 --- show your recent contacts")
 print("  groupname: message        --- send to a group you've joined")
 print("  username: message         --- send to a user")
 print("  /file username filepath   --- send a file via TCP")
@@ -257,6 +312,34 @@ while True:
         group_name = msg[7:].strip().lower()
         send_message(client, "POST", "/leave", {"FROM": name, "TARGET": group_name})
         joined_groups.discard(group_name)
+
+    elif msg.startswith("/history "):
+        target  = msg[9:].strip().lower()
+        history = load_conversation(target)
+        if not history:
+            print(f"[HISTORY] No messages with {target}.")
+        else:
+            print(f"[HISTORY] Conversation with {target}:")
+            for m in history:
+                print(f"  [{m['sent_at']}] {m['sender']}: {m['content']}")
+ 
+    elif msg.startswith("/ghistory "):
+        group_name = msg[10:].strip().lower()
+        history    = load_group_conversation(group_name)
+        if not history:
+            print(f"[HISTORY] No messages in group {group_name}.")
+        else:
+            print(f"[HISTORY] Group {group_name}:")
+            for m in history:
+                print(f"  [{m['sent_at']}] {m['sender']}: {m['content']}")
+ 
+    elif msg.strip() == "/contacts":
+        contacts = load_recent_contacts()
+        if not contacts:
+            print("[CONTACTS] No recent contacts.")
+        else:
+            print("[CONTACTS] Recent contacts:", ", ".join(contacts))
+ 
 
     elif msg.startswith("/file "):
         parts = msg[6:].strip().split(" ", 1)

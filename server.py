@@ -5,6 +5,8 @@
 import socket
 import threading
 from protocol import send_message, recv_message
+from database import init_db, check_user, save_message, get_conversation, get_recent_contacts, get_group_conversation
+import json
 
 PORT   = 5050
 SERVER = "0.0.0.0"
@@ -30,11 +32,12 @@ def handle_client(conn, addr):
         name     = msg["headers"].get("FROM", "").lower()
         password = msg["headers"].get("PASSWORD", "")
 
-        if name not in users:
+        result = check_user(name, password)
+        if result == "not_found":
             send_message(conn, "CHAT/1.0", "401 ERROR", {"ERROR": "Username incorrect."})
             conn.close()
             return
-        if users[name] != password:
+        if result == "wrong_pass":
             send_message(conn, "CHAT/1.0", "401 ERROR", {"ERROR": "Password incorrect."})
             conn.close()
             return
@@ -66,6 +69,7 @@ def handle_client(conn, addr):
 
             # 1-to-1 text message — relayed through server via TCP
             elif path == "/message":
+                content = body.decode(FORMAT) if isinstance(body, bytes) else body
                 if target in clients:
                     send_message(
                         clients[target], "POST", "/message",
@@ -76,6 +80,8 @@ def handle_client(conn, addr):
                     send_message(conn, "CHAT/1.0", "200 OK", {"MESSAGE": "Message delivered."})
                 else:
                     send_message(conn, "CHAT/1.0", "404 ERROR", {"ERROR": f"'{target}' is not online."})
+                
+                save_message(sender, target, content, "text")
 
             # File transfer — full binary body relayed through server via TCP
             elif path == "/file":
@@ -89,6 +95,8 @@ def handle_client(conn, addr):
                     send_message(conn, "CHAT/1.0", "200 OK", {"MESSAGE": f"File sent to '{target}'."})
                 else:
                     send_message(conn, "CHAT/1.0", "404 ERROR", {"ERROR": f"'{target}' is not online."})
+
+                save_message(sender, target, f"[file: {msg["headers"].get("FILE-NAME", "file")}]", "file")
 
             # Join group
             elif path == "/join":
@@ -114,6 +122,8 @@ def handle_client(conn, addr):
                 if sender not in groups[target]:
                     send_message(conn, "CHAT/1.0", "403 ERROR", {"ERROR": f"You are not a member of '{target}'."})
                     continue
+
+                content = body.decode(FORMAT) if isinstance(body, bytes) else body
                 for member in groups[target]:
                     if member != sender and member in clients:
                         send_message(
@@ -123,7 +133,32 @@ def handle_client(conn, addr):
                             body
                         )
                 send_message(conn, "CHAT/1.0", "200 OK", {"MESSAGE": f"Message sent to group '{target}'."})
+                save_message(sender, target, content, "group")
 
+            # ── ADDITION: Load conversation history (UI: contact clicked) ─────
+            elif path == "/history":
+                history = get_conversation(sender, target)
+                payload = json.dumps(history)
+                send_message(conn, "CHAT/1.0", "200 OK",
+                             {"MESSAGE": "History loaded.", "RESULT-COUNT": len(history)},
+                             payload)
+ 
+            # ── ADDITION: Load group history (UI: group clicked) ──────────────
+            elif path == "/group-history":
+                history = get_group_conversation(target)
+                payload = json.dumps(history)
+                send_message(conn, "CHAT/1.0", "200 OK",
+                             {"MESSAGE": "Group history loaded.", "RESULT-COUNT": len(history)},
+                             payload)
+ 
+            # ── ADDITION: Load recent contacts (UI: sidebar on login) ─────────
+            elif path == "/contacts":
+                contacts = get_recent_contacts(sender)
+                payload  = json.dumps(contacts)
+                send_message(conn, "CHAT/1.0", "200 OK",
+                             {"MESSAGE": "Contacts loaded.", "RESULT-COUNT": len(contacts)},
+                             payload)
+                
             # ── Call signalling ───────────────────────────────────────────────
             # Caller sends /call — server forwards the request to the target,
             # then both peers exchange UDP ports directly for audio P2P.
@@ -193,4 +228,5 @@ def start():
 
 
 print("[STARTING] Server is starting...")
+init_db()
 start()
