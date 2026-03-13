@@ -1,51 +1,43 @@
 # DATABASE
-# Hosted on your home server alongside server.py
-# Uses SQLite — built into Python, no install needed
-# Tables: users, messages
+# Stores all data locally in a JSON file — no server, no SQL, no installs needed
+# File: chatapp_data.json
+# Structure:
+#   {
+#     "users":    { "tim": "hashed_password", ... },
+#     "messages": [ { sender, target, content, msg_type, sent_at }, ... ]
+#   }
 
-import sqlite3
+import json
 import hashlib
+import os
+from datetime import datetime
 
-DB_PATH = "chatapp.db"
+DB_PATH = "chatapp_data.json"
 
 
-def get_conn():
-    """Get a thread-safe DB connection."""
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    return conn
+# ── Core read/write ────────────────────────────────────────────────────────────
+
+def load_db():
+    """Read the JSON file and return the full data dict."""
+    if not os.path.exists(DB_PATH):
+        return {"users": {}, "messages": []}
+    with open(DB_PATH, "r") as f:
+        return json.load(f)
+
+
+def save_db(data):
+    """Write the full data dict back to the JSON file."""
+    with open(DB_PATH, "w") as f:
+        json.dump(data, f, indent=2)
 
 
 def init_db():
-    """Create tables if they don't exist. Call once on server startup."""
-    conn = get_conn()
-    c = conn.cursor()
-
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            username    TEXT    UNIQUE NOT NULL,
-            password    TEXT    NOT NULL,
-            created_at  TEXT    DEFAULT (datetime('now'))
-        )
-    """)
-
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS messages (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            sender_id   INTEGER NOT NULL,
-            target_id   INTEGER NOT NULL,
-            content     TEXT,
-            msg_type    TEXT    DEFAULT 'text',
-            sent_at     TEXT    DEFAULT (datetime('now')),
-            FOREIGN KEY (sender_id) REFERENCES users(id),
-            FOREIGN KEY (target_id) REFERENCES users(id)
-        )
-    """)
-
-    conn.commit()
-    conn.close()
-    print("[DB] Tables ready.")
+    """Create the JSON file with empty structure if it doesn't exist."""
+    if not os.path.exists(DB_PATH):
+        save_db({"users": {}, "messages": []})
+        print("[DB] Database created.")
+    else:
+        print("[DB] Database loaded.")
 
 
 # ── Password hashing ───────────────────────────────────────────────────────────
@@ -57,192 +49,137 @@ def hash_password(password):
 # ── User functions ─────────────────────────────────────────────────────────────
 
 def add_user(username, password):
-    """Register a new user. Returns True on success, False if username taken."""
-    conn = get_conn()
-    try:
-        conn.execute(
-            "INSERT INTO users (username, password) VALUES (?, ?)",
-            (username.lower(), hash_password(password))
-        )
-        conn.commit()
-        return True
-    except sqlite3.IntegrityError:
+    """
+    Register a new user.
+    Returns True on success, False if username already exists.
+    """
+    data = load_db()
+    if username.lower() in data["users"]:
         return False
-    finally:
-        conn.close()
+    data["users"][username.lower()] = hash_password(password)
+    save_db(data)
+    return True
 
 
 def check_user(username, password):
     """
+    Check login credentials.
     Returns:
       'ok'          — credentials correct
       'wrong_pass'  — username exists but password wrong
       'not_found'   — username doesn't exist
     """
-    conn = get_conn()
-    row = conn.execute(
-        "SELECT password FROM users WHERE username = ?",
-        (username.lower(),)
-    ).fetchone()
-    conn.close()
-
-    if row is None:
+    data = load_db()
+    username = username.lower()
+    if username not in data["users"]:
         return "not_found"
-    if row["password"] == hash_password(password):
+    if data["users"][username] == hash_password(password):
         return "ok"
     return "wrong_pass"
 
 
-def get_user_id(username):
-    """Get a user's numeric ID from their username."""
-    conn = get_conn()
-    row = conn.execute(
-        "SELECT id FROM users WHERE username = ?",
-        (username.lower(),)
-    ).fetchone()
-    conn.close()
-    return row["id"] if row else None
-
-
 def get_all_users():
     """Return a list of all registered usernames."""
-    conn = get_conn()
-    rows = conn.execute("SELECT username FROM users").fetchall()
-    conn.close()
-    return [r["username"] for r in rows]
+    data = load_db()
+    return list(data["users"].keys())
 
 
 # ── Message functions ──────────────────────────────────────────────────────────
 
 def save_message(sender, target, content, msg_type="text"):
     """
-    Save a message using sender/target usernames.
-    Resolves usernames to IDs internally — server.py needs no changes.
-    For group messages, target is the group name stored as a plain string.
+    Append a message to the messages list in the JSON file.
+    Called by server.py every time a message is sent.
     """
-    sender_id = get_user_id(sender)
-
-    if msg_type == "group":
-        # Groups don't have a users.id — store sender_id twice as a placeholder
-        # and rely on msg_type + content to identify group messages
-        target_id = sender_id
-    else:
-        target_id = get_user_id(target)
-
-    if sender_id is None or target_id is None:
-        print(f"[DB] save_message failed — unknown user: {sender} or {target}")
-        return
-
-    conn = get_conn()
-    conn.execute(
-        "INSERT INTO messages (sender_id, target_id, content, msg_type) VALUES (?, ?, ?, ?)",
-        (sender_id, target_id, content, msg_type)
-    )
-    conn.commit()
-    conn.close()
+    data = load_db()
+    data["messages"].append({
+        "sender":   sender.lower(),
+        "target":   target.lower(),
+        "content":  content,
+        "msg_type": msg_type,
+        "sent_at":  datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    })
+    save_db(data)
 
 
 def get_conversation(user_a, user_b, limit=50):
     """
-    Load the full conversation between two users when a contact is clicked.
+    Load the conversation between two users when a contact is clicked.
 
-    SELECT all messages where
-      (sender = user_a AND target = user_b)
-      OR (sender = user_b AND target = user_a)
-    Ordered oldest -> newest, capped at limit.
+    Filters messages where:
+      (sender == user_a AND target == user_b)
+      OR (sender == user_b AND target == user_a)
 
-    Returns a list of dicts ready to render in the UI:
-      [{ sender, target, content, msg_type, sent_at }, ...]
+    Returns the last `limit` messages, oldest first.
+    Each message: { sender, target, content, msg_type, sent_at }
     """
-    id_a = get_user_id(user_a)
-    id_b = get_user_id(user_b)
+    data   = load_db()
+    user_a = user_a.lower()
+    user_b = user_b.lower()
 
-    if id_a is None or id_b is None:
-        return []
+    filtered = [
+        m for m in data["messages"]
+        if m["msg_type"] == "text"
+        and (
+            (m["sender"] == user_a and m["target"] == user_b)
+            or
+            (m["sender"] == user_b and m["target"] == user_a)
+        )
+    ]
 
-    conn = get_conn()
-    rows = conn.execute("""
-        SELECT
-            u_sender.username   AS sender,
-            u_target.username   AS target,
-            m.content,
-            m.msg_type,
-            m.sent_at
-        FROM messages m
-        JOIN users u_sender ON m.sender_id = u_sender.id
-        JOIN users u_target ON m.target_id = u_target.id
-        WHERE
-            (m.sender_id = ? AND m.target_id = ?)
-            OR
-            (m.sender_id = ? AND m.target_id = ?)
-        ORDER BY m.sent_at ASC
-        LIMIT ?
-    """, (id_a, id_b, id_b, id_a, limit)).fetchall()
-    conn.close()
-
-    return [dict(r) for r in rows]
+    return filtered[-limit:]
 
 
 def get_group_conversation(group_name, limit=50):
     """
     Load all messages sent to a group when the group is clicked.
 
-    SELECT all messages where msg_type = 'group' AND content target = group_name.
-    Ordered oldest -> newest.
+    Filters messages where:
+      msg_type == 'group' AND target == group_name
 
-    Returns a list of dicts:
-      [{ sender, group_name, content, sent_at }, ...]
+    Returns the last `limit` messages, oldest first.
+    Each message: { sender, target, content, msg_type, sent_at }
     """
-    conn = get_conn()
-    rows = conn.execute("""
-        SELECT
-            u_sender.username   AS sender,
-            m.content,
-            m.sent_at
-        FROM messages m
-        JOIN users u_sender ON m.sender_id = u_sender.id
-        WHERE m.msg_type = 'group'
-          AND m.content LIKE ?
-        ORDER BY m.sent_at ASC
-        LIMIT ?
-    """, (f"%{group_name}%", limit)).fetchall()
-    conn.close()
+    data       = load_db()
+    group_name = group_name.lower()
 
-    return [dict(r) for r in rows]
+    filtered = [
+        m for m in data["messages"]
+        if m["msg_type"] == "group"
+        and m["target"] == group_name
+    ]
+
+    return filtered[-limit:]
 
 
 def get_recent_contacts(username, limit=20):
     """
-    Get the contacts a user has recently spoken to.
+    Get the list of users that `username` has recently spoken to.
     Used to populate the sidebar/contact list in the UI on login.
 
-    Returns usernames ordered by most recent message first:
-      ["kylian", "kp", ...]
+    Looks through all text messages involving the user,
+    collects the other party in each conversation,
+    and returns them ordered by most recent message first.
+
+    Returns a list of usernames: ["kylian", "kp", ...]
     """
-    user_id = get_user_id(username)
-    if user_id is None:
-        return []
+    data     = load_db()
+    username = username.lower()
+    seen     = {}   # contact -> most recent sent_at
 
-    conn = get_conn()
-    rows = conn.execute("""
-        SELECT DISTINCT
-            CASE
-                WHEN m.sender_id = ? THEN u_target.username
-                ELSE u_sender.username
-            END AS contact,
-            MAX(m.sent_at) AS last_msg
-        FROM messages m
-        JOIN users u_sender ON m.sender_id = u_sender.id
-        JOIN users u_target ON m.target_id = u_target.id
-        WHERE (m.sender_id = ? OR m.target_id = ?)
-          AND m.msg_type = 'text'
-        GROUP BY contact
-        ORDER BY last_msg DESC
-        LIMIT ?
-    """, (user_id, user_id, user_id, limit)).fetchall()
-    conn.close()
+    for m in data["messages"]:
+        if m["msg_type"] != "text":
+            continue
+        if m["sender"] == username:
+            contact = m["target"]
+        elif m["target"] == username:
+            contact = m["sender"]
+        else:
+            continue
+        seen[contact] = m["sent_at"]   # keeps updating to the latest
 
-    return [r["contact"] for r in rows]
+    sorted_contacts = sorted(seen, key=lambda c: seen[c], reverse=True)
+    return sorted_contacts[:limit]
 
 
 # ── Run once to initialise ─────────────────────────────────────────────────────

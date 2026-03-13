@@ -14,7 +14,7 @@ from protocol import (
 
 # ── Config ────────────────────────────────────────────────────────────────────
 PORT               = 5050
-SERVER             = "13.49.137.214"   # AWS server IP
+SERVER             = "127.0.0.1"   # AWS server IP
 FORMAT             = 'utf-8'
 ADDR               = (SERVER, PORT)
 DISCONNECT_MESSAGE = "!DISCONNECT"
@@ -71,6 +71,7 @@ in_call        = False
 call_peer_addr = None   # (ip, udp_port) of the other side
 call_stop      = threading.Event()
 pending_call   = None   # (caller, caller_ip, caller_udp) of an incoming call
+pending_history = None
 
 
 # ── FILE TRANSFER (TCP via server) ────────────────────────────────────────────
@@ -160,114 +161,113 @@ def end_audio_call():
 # ── ADDITION: History helpers (called by UI when contact is clicked) ──────────
  
 def load_conversation(target):
-    """
-    Request message history with a user from the server.
-    Send a /history request and wait for the JSON response.
-    Returns a list of message dicts, oldest first:
-      [{ "sender", "target", "content", "msg_type", "sent_at" }, ...]
-    """
+    global pending_history
+    pending_history = f"dm:{target}"
     send_message(client, "POST", "/history", {"FROM": name, "TARGET": target})
-    response = recv_message(client)
-    if response and "200" in response["path"]:
-        body = response["body"]
-        if isinstance(body, bytes):
-            body = body.decode(FORMAT)
-        return json.loads(body) if body else []
-    return []
  
  
 def load_group_conversation(group_name):
-    """
-    Request message history for a group from the server.
-    Send a /group-history request and wait for the JSON response.
-    Returns a list of message dicts, oldest first:
-      [{ "sender", "target", "content", "msg_type", "sent_at" }, ...]
-    """
+    global pending_history
+    pending_history = f"group:{group_name}"
     send_message(client, "POST", "/group-history", {"FROM": name, "TARGET": group_name})
-    response = recv_message(client)
-    if response and "200" in response["path"]:
-        body = response["body"]
-        if isinstance(body, bytes):
-            body = body.decode(FORMAT)
-        return json.loads(body) if body else []
-    return []
  
  
 def load_recent_contacts():
-    """
-    Request the sidebar contact list from the server.
-    Send a /contacts request and wait for the JSON response.
-    Returns a list of usernames ordered by most recent message:
-      ["kylian", "kp", ...]
-    """
+    global pending_history
+    pending_history = "contacts"
     send_message(client, "POST", "/contacts", {"FROM": name})
-    response = recv_message(client)
-    if response and "200" in response["path"]:
-        body = response["body"]
-        if isinstance(body, bytes):
-            body = body.decode(FORMAT)
-        return json.loads(body) if body else []
-    return []
 
 # ── TCP RECEIVE LOOP ──────────────────────────────────────────────────────────
 
 def receive():
+    global pending_history, pending_call
+
     while True:
         try:
             msg = recv_message(client)
             if not msg:
                 break
 
-            method = msg["method"]
-            path   = msg["path"]
+            method  = msg["method"]
+            path    = msg["path"]
+            headers = msg["headers"]
+            body    = msg["body"]
 
-            # Server status / control response
             if method == "CHAT/1.0":
-                info = msg["headers"].get("ERROR") or msg["headers"].get("MESSAGE", "")
 
-                # Caller receives peer UDP details after /call is accepted
-                if "PEER-IP" in msg["headers"] and "PEER-UDP" in msg["headers"] and not in_call:
-                    peer_ip  = msg["headers"]["PEER-IP"]
-                    peer_udp = int(msg["headers"]["PEER-UDP"])
-                    print(f"[CALL] Call connected. Starting audio...")
+                # History / contacts response
+                if pending_history and "200" in path:
+                    raw = body.decode(FORMAT) if isinstance(body, bytes) else body
+
+                    if pending_history.startswith("dm:"):
+                        target = pending_history[3:]
+                        history = json.loads(raw) if raw else []
+                        if not history:
+                            print(f"[HISTORY] No messages with {target}.")
+                        else:
+                            print(f"[HISTORY] Conversation with {target}:")
+                            for m in history:
+                                print(f"  [{m['sent_at']}] {m['sender']}: {m['content']}")
+
+                    elif pending_history.startswith("group:"):
+                        group_name = pending_history[6:]
+                        history = json.loads(raw) if raw else []
+                        if not history:
+                            print(f"[HISTORY] No messages in group '{group_name}'.")
+                        else:
+                            print(f"[HISTORY] Group '{group_name}':")
+                            for m in history:
+                                print(f"  [{m['sent_at']}] {m['sender']}: {m['content']}")
+
+                    elif pending_history == "contacts":
+                        contacts = json.loads(raw) if raw else []
+                        if not contacts:
+                            print("[CONTACTS] No recent contacts.")
+                        else:
+                            print("[CONTACTS] Recent contacts:", ", ".join(contacts))
+
+                    pending_history = None
+
+                # Call connected
+                elif "PEER-IP" in headers and "PEER-UDP" in headers and not in_call:
+                    peer_ip  = headers["PEER-IP"]
+                    peer_udp = int(headers["PEER-UDP"])
+                    print("[CALL] Call connected. Starting audio...")
                     if AUDIO_AVAILABLE:
                         start_audio_call(peer_ip, peer_udp)
 
-                elif info:
-                    print(f"[Server {path}]: {info}")
+                # Only print errors, suppress delivery confirmations
+                else:
+                    info = headers.get("ERROR", "")
+                    if info:
+                        print(f"[Server {path}]: {info}")
 
-            # Incoming text message
             elif method == "POST" and path == "/message":
-                sender       = msg["headers"].get("FROM", "?")
-                target       = msg["headers"].get("TARGET", "")
-                body         = msg["body"].decode(FORMAT) if isinstance(msg["body"], bytes) else msg["body"]
-                tag = f"group:{target}" if target in joined_groups else sender
-                print(f"[{tag}] {sender}: {body}")
+                sender = headers.get("FROM", "?")
+                target = headers.get("TARGET", "")
+                text   = body.decode(FORMAT) if isinstance(body, bytes) else body
+                tag    = f"group:{target}" if target in joined_groups else sender
+                print(f"[{tag}] {sender}: {text}")
 
-            # Incoming file
             elif method == "POST" and path == "/file":
                 threading.Thread(target=handle_incoming_file, args=(msg,), daemon=True).start()
 
-            # Incoming call request — ask user to accept or reject
             elif method == "POST" and path == "/call":
-                caller     = msg["headers"].get("FROM", "?")
-                caller_ip  = msg["headers"].get("CALLER-IP")
-                caller_udp = int(msg["headers"].get("CALLER-UDP", 0))
+                caller     = headers.get("FROM", "?")
+                caller_ip  = headers.get("CALLER-IP")
+                caller_udp = int(headers.get("CALLER-UDP", 0))
                 print(f"\n[CALL] Incoming call from {caller}. Type '/accept {caller}' or '/reject {caller}'.")
-                global pending_call
                 pending_call = (caller, caller_ip, caller_udp)
 
-            # Call accepted by the target — caller starts audio
             elif method == "POST" and path == "/call-accept":
-                peer_ip  = msg["headers"].get("PEER-IP")
-                peer_udp = int(msg["headers"].get("PEER-UDP", 0))
-                print(f"[CALL] Call accepted. Starting audio...")
+                peer_ip  = headers.get("PEER-IP")
+                peer_udp = int(headers.get("PEER-UDP", 0))
+                print("[CALL] Call accepted. Starting audio...")
                 if AUDIO_AVAILABLE:
                     start_audio_call(peer_ip, peer_udp)
 
-            # Remote peer ended the call
             elif method == "POST" and path == "/endcall":
-                caller = msg["headers"].get("FROM", "?")
+                caller = headers.get("FROM", "?")
                 print(f"[CALL] {caller} ended the call.")
                 end_audio_call()
 
@@ -314,31 +314,15 @@ while True:
         joined_groups.discard(group_name)
 
     elif msg.startswith("/history "):
-        target  = msg[9:].strip().lower()
-        history = load_conversation(target)
-        if not history:
-            print(f"[HISTORY] No messages with {target}.")
-        else:
-            print(f"[HISTORY] Conversation with {target}:")
-            for m in history:
-                print(f"  [{m['sent_at']}] {m['sender']}: {m['content']}")
+        target = msg[9:].strip().lower()
+        load_conversation(target)
  
     elif msg.startswith("/ghistory "):
         group_name = msg[10:].strip().lower()
-        history    = load_group_conversation(group_name)
-        if not history:
-            print(f"[HISTORY] No messages in group {group_name}.")
-        else:
-            print(f"[HISTORY] Group {group_name}:")
-            for m in history:
-                print(f"  [{m['sent_at']}] {m['sender']}: {m['content']}")
+        load_group_conversation(group_name)
  
     elif msg.strip() == "/contacts":
-        contacts = load_recent_contacts()
-        if not contacts:
-            print("[CONTACTS] No recent contacts.")
-        else:
-            print("[CONTACTS] Recent contacts:", ", ".join(contacts))
+        load_recent_contacts()
  
 
     elif msg.startswith("/file "):
