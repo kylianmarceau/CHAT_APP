@@ -1,10 +1,12 @@
 # DATABASE
-# Stores all data locally in a JSON file — no server, no SQL, no installs needed
-# File: chatapp_data.json
-# Structure:
+# Stores all data like chats, usernames, password and all message history locally in a .json no need for server or installs
+# stores in chatapp_data.json in project directory
+# .json structure:
 #   {
 #     "users":    { "tim": "hashed_password", ... },
-#     "messages": [ { sender, target, content, msg_type, sent_at }, ... ]
+#     "messages": [ {
+# 
+#  sender, target, content, msg_type, sent_at }, ... ]
 #   }
 
 import json
@@ -15,10 +17,11 @@ from datetime import datetime
 DB_PATH = "chatapp_data.json"
 
 
-# ── Core read/write ────────────────────────────────────────────────────────────
+# main read/write functionality
 
 def load_db():
-    """Read the JSON file and return the full data dict."""
+    # read the full json file and return all data
+    
     if not os.path.exists(DB_PATH):
         return {"users": {}, "messages": []}
     with open(DB_PATH, "r") as f:
@@ -26,13 +29,13 @@ def load_db():
 
 
 def save_db(data):
-    """Write the full data dict back to the JSON file."""
+    # write the data dictionary back to the json file(ie for newly registered users)
     with open(DB_PATH, "w") as f:
         json.dump(data, f, indent=2)
 
 
 def init_db():
-    """Create the JSON file with empty structure if it doesn't exist."""
+    # cerate the json file (empty structure if it doesnt exist yet)
     if not os.path.exists(DB_PATH):
         save_db({"users": {}, "messages": []})
         print("[DB] Database created.")
@@ -40,19 +43,16 @@ def init_db():
         print("[DB] Database loaded.")
 
 
-# ── Password hashing ───────────────────────────────────────────────────────────
-
+# hash password
+# use SHA-256 hashing algorithm to securely store passwords
 def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
 
 
-# ── User functions ─────────────────────────────────────────────────────────────
+# functions for users
 
 def add_user(username, password):
-    """
-    Register a new user.
-    Returns True on success, False if username already exists.
-    """
+    # register a new user, return true if success and false if username is taken
     data = load_db()
     if username.lower() in data["users"]:
         return False
@@ -62,13 +62,9 @@ def add_user(username, password):
 
 
 def check_user(username, password):
-    """
-    Check login credentials.
-    Returns:
-      'ok'          — credentials correct
-      'wrong_pass'  — username exists but password wrong
-      'not_found'   — username doesn't exist
-    """
+  
+    # check credentials for login check database 
+    # returns 'ok' is correct, 'wrong_pass' for wrong password, 'not_found' for wrong usernames
     data = load_db()
     username = username.lower()
     if username not in data["users"]:
@@ -79,18 +75,15 @@ def check_user(username, password):
 
 
 def get_all_users():
-    """Return a list of all registered usernames."""
+    # get list of all usernames to print 
     data = load_db()
     return list(data["users"].keys())
 
 
-# ── Message functions ──────────────────────────────────────────────────────────
-
 def save_message(sender, target, content, msg_type="text"):
-    """
-    Append a message to the messages list in the JSON file.
-    Called by server.py every time a message is sent.
-    """
+ 
+    # add message to message list in the json file
+    #called by server.py every time a message is send between clients or on a group
     data = load_db()
     data["messages"].append({
         "sender":   sender.lower(),
@@ -103,16 +96,8 @@ def save_message(sender, target, content, msg_type="text"):
 
 
 def get_conversation(user_a, user_b, limit=50):
-    """
-    Load the conversation between two users when a contact is clicked.
-
-    Filters messages where:
-      (sender == user_a AND target == user_b)
-      OR (sender == user_b AND target == user_a)
-
-    Returns the last `limit` messages, oldest first.
-    Each message: { sender, target, content, msg_type, sent_at }
-    """
+    
+    #load the chat history between 2 clients or group when clicked on contact to message
     data   = load_db()
     user_a = user_a.lower()
     user_b = user_b.lower()
@@ -131,15 +116,7 @@ def get_conversation(user_a, user_b, limit=50):
 
 
 def get_group_conversation(group_name, limit=50):
-    """
-    Load all messages sent to a group when the group is clicked.
-
-    Filters messages where:
-      msg_type == 'group' AND target == group_name
-
-    Returns the last `limit` messages, oldest first.
-    Each message: { sender, target, content, msg_type, sent_at }
-    """
+    #load the chat history between 2 clients or group when clicked on contact to message
     data       = load_db()
     group_name = group_name.lower()
 
@@ -153,16 +130,8 @@ def get_group_conversation(group_name, limit=50):
 
 
 def get_recent_contacts(username, limit=20):
-    """
-    Get the list of users that `username` has recently spoken to.
-    Used to populate the sidebar/contact list in the UI on login.
-
-    Looks through all text messages involving the user,
-    collects the other party in each conversation,
-    and returns them ordered by most recent message first.
-
-    Returns a list of usernames: ["kylian", "kp", ...]
-    """
+    # return list of users that username recently chatted with
+    # used to fill in side bar on gui addition to not be empty space, like whatsapp
     data     = load_db()
     username = username.lower()
     seen     = {}   # contact -> most recent sent_at
@@ -182,13 +151,12 @@ def get_recent_contacts(username, limit=20):
     return sorted_contacts[:limit]
 
 
-# ── Run once to initialise ─────────────────────────────────────────────────────
 if __name__ == "__main__":
     init_db()
 
-    # Seed test users — run once then comment out
+    # save test users —- our group members, already populate to database so its not empty 
     add_user("tim",    "1234")
-    add_user("kylian", "4567")
+    add_user("kylian", "6767")
     add_user("kp",     "999")
     print("[DB] Seed users added.")
     print("[DB] All users:", get_all_users())
