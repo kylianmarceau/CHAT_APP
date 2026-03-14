@@ -10,7 +10,7 @@ from database import init_db, check_user, save_message, get_conversation, get_re
 
 HEADER = 64
 PORT = 5050
-SERVER = "0.0.0.0"
+SERVER = "13.49.137.214" # AWS ipv4 adress to connect roemotely
 ADDR = (SERVER, PORT)
 FORMAT = 'utf-8'
 DISCONNECT_MESSAGE = "!DISCONNECTED"
@@ -19,23 +19,23 @@ server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 server.bind(ADDR)
 server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
-clients          = {}   # name -> TCP connection
-client_udp_ports = {}   # name -> UDP port (for audio calls)
-client_local_ips = {}   # name -> local IP (for same-network UDP P2P)
-groups           = {}   # group name -> set of member names
+clients          = {}   # maps the username to tcp connection
+client_udp_ports = {}  
+client_local_ips = {}   
+groups           = {}   
 
 
 def handle_client(conn, addr):
     name = None
     try:
-        # ── Authentication ────────────────────────────────────────────────────
+        # auth
         msg    = recv_message(conn)
         action = msg["headers"].get("ACTION", "login")
         name   = msg["headers"].get("FROM", "").lower()
         password = msg["headers"].get("PASSWORD", "")
 
         if action == "register":
-            success = add_user(name, password)
+            success = add_user(name, password) # succesfful register = add user to database
             if success:
                 send_message(conn, "CHAT/1.0", "200 OK", {"MESSAGE": "Account created! You can now log in."})
             else:
@@ -43,7 +43,7 @@ def handle_client(conn, addr):
             conn.close()
             return
 
-        # Otherwise it's a login
+        # login
         result = check_user(name, password)
         if result == "not_found":
             send_message(conn, "CHAT/1.0", "401 ERROR", {"ERROR": "Username incorrect."})
@@ -58,15 +58,14 @@ def handle_client(conn, addr):
             conn.close()
             return
 
-        clients[name]          = conn
-        client_udp_ports[name] = msg["headers"].get("UDP-PORT", "")
-        client_local_ips[name] = msg["headers"].get("LOCAL-IP", conn.getpeername()[0])
+        clients[name]= conn
+        client_udp_ports[name]= msg["headers"].get("UDP-PORT", "")
+        client_local_ips[name] =msg["headers"].get("LOCAL-IP", conn.getpeername()[0])
         print(f"[+] {name} connected from {addr}")
         send_message(conn, "CHAT/1.0", "200 OK", {"MESSAGE": f"Welcome {name}! Login successful."})
         
-        # ── Main message loop ─────────────────────────────────────────────────
-        
-        # ── Main message loop ─────────────────────────────────────────────────
+
+        #message loop Loops forever waiting for the next message from this client
         while True:
             msg = recv_message(conn)
             if not msg:
@@ -77,48 +76,39 @@ def handle_client(conn, addr):
             target = msg["headers"].get("TARGET", "").lower()
             body   = msg["body"]
  
-            # ── Logout ────────────────────────────────────────────────────────
+            # logout
             if path == "/logout":
                 break
  
-            # ── 1-to-1 text message ───────────────────────────────────────────
+            # one to one messaging
             elif path == "/message":
                 content = body.decode(FORMAT) if isinstance(body, bytes) else body
-                if target in clients:
-                    send_message(
-                        clients[target], "POST", "/message",
-                        {"FROM": sender, "TARGET": target,
-                         "CONTENT-TYPE": msg["headers"].get("CONTENT-TYPE", "text")},
-                        body
-                    )
+                if target in clients:# check if recipient is even connected if not send error not connected
+                    send_message(clients[target], "POST", "/message",{"FROM": sender, "TARGET": target,"CONTENT-TYPE": msg["headers"].get("CONTENT-TYPE", "text")},body)
                     send_message(conn, "CHAT/1.0", "200 OK", {"MESSAGE": "Message delivered."})
                 else:
                     send_message(conn, "CHAT/1.0", "404 ERROR", {"ERROR": f"'{target}' is not online."})
-                save_message(sender, target, content, "text")
+                save_message(sender, target, content, "text") # from newly implemented database, save history
  
-            # ── File transfer ─────────────────────────────────────────────────
+            # file transfer
             elif path == "/file":
                 filename = msg["headers"].get("FILE-NAME", "file")
                 if target in clients:
-                    send_message(
-                        clients[target], "POST", "/file",
-                        {"FROM": sender, "TARGET": target, "FILE-NAME": filename},
-                        body
-                    )
+                    send_message(clients[target], "POST", "/file",{"FROM": sender, "TARGET": target, "FILE-NAME": filename},body)
                     send_message(conn, "CHAT/1.0", "200 OK", {"MESSAGE": f"File sent to '{target}'."})
                 else:
                     send_message(conn, "CHAT/1.0", "404 ERROR", {"ERROR": f"'{target}' is not online."})
                 save_message(sender, target, f"[file: {filename}]", "file")
  
-            # ── Join group ────────────────────────────────────────────────────
+            # join group
             elif path == "/join":
                 if not target:
                     send_message(conn, "CHAT/1.0", "400 ERROR", {"ERROR": "No group specified."})
                     continue
-                groups.setdefault(target, set()).add(sender)
+                groups.setdefault(target, set()).add(sender) # setdefault(target, set()) — creates the group if it doesn't exist yet, then adds the sender to it
                 send_message(conn, "CHAT/1.0", "200 OK", {"MESSAGE": f"You joined group '{target}'."})
  
-            # ── Leave group ───────────────────────────────────────────────────
+            # leave the group
             elif path == "/leave":
                 if not target or target not in groups or sender not in groups[target]:
                     send_message(conn, "CHAT/1.0", "400 ERROR", {"ERROR": "You are not in that group."})
@@ -126,7 +116,7 @@ def handle_client(conn, addr):
                 groups[target].remove(sender)
                 send_message(conn, "CHAT/1.0", "200 OK", {"MESSAGE": f"You left group '{target}'."})
  
-            # ── Group message ─────────────────────────────────────────────────
+            # send group message
             elif path == "/group-message":
                 if not target or target not in groups:
                     send_message(conn, "CHAT/1.0", "404 ERROR", {"ERROR": f"Group '{target}' does not exist."})
@@ -137,71 +127,51 @@ def handle_client(conn, addr):
                 content = body.decode(FORMAT) if isinstance(body, bytes) else body
                 for member in groups[target]:
                     if member != sender and member in clients:
-                        send_message(
-                            clients[member], "POST", "/message",
-                            {"FROM": sender, "TARGET": target,
-                             "CONTENT-TYPE": msg["headers"].get("CONTENT-TYPE", "text")},
-                            body
-                        )
+                        send_message(clients[member], "POST", "/message",{"FROM": sender, "TARGET": target,"CONTENT-TYPE": msg["headers"].get("CONTENT-TYPE", "text")},body)
                 send_message(conn, "CHAT/1.0", "200 OK", {"MESSAGE": f"Message sent to group '{target}'."})
                 save_message(sender, target, content, "group")
  
-            # ── Load conversation history (UI: contact clicked) ───────────────
+            # load conversation history( from the data base)
             elif path == "/history":
                 history = get_conversation(sender, target)
                 payload = json.dumps(history)
-                send_message(conn, "CHAT/1.0", "200 OK",
-                             {"MESSAGE": "History loaded.", "RESULT-COUNT": len(history)},
-                             payload)
+                send_message(conn, "CHAT/1.0", "200 OK",{"MESSAGE": "History loaded.", "RESULT-COUNT": len(history)},payload)
  
-            # ── Load group history (UI: group clicked) ────────────────────────
+            # load group conversation history
             elif path == "/group-history":
                 history = get_group_conversation(target)
                 payload = json.dumps(history)
-                send_message(conn, "CHAT/1.0", "200 OK",
-                             {"MESSAGE": "Group history loaded.", "RESULT-COUNT": len(history)},
-                             payload)
+                send_message(conn, "CHAT/1.0", "200 OK",{"MESSAGE": "Group history loaded.", "RESULT-COUNT": len(history)},payload)
  
-            # ── Load recent contacts (UI: sidebar on login) ───────────────────
+            # load the recent contacts, for gui 
             elif path == "/contacts":
                 contacts = get_recent_contacts(sender)
                 payload  = json.dumps(contacts)
-                send_message(conn, "CHAT/1.0", "200 OK",
-                             {"MESSAGE": "Contacts loaded.", "RESULT-COUNT": len(contacts)},
-                             payload)
+                send_message(conn, "CHAT/1.0", "200 OK",{"MESSAGE": "Contacts loaded.", "RESULT-COUNT": len(contacts)},payload)
  
-            # ── Call signalling ───────────────────────────────────────────────
+            # signalling for calls 
             elif path == "/call":
                 if target not in clients:
                     send_message(conn, "CHAT/1.0", "404 ERROR", {"ERROR": f"'{target}' is not online."})
                     continue
  
-                caller_ip  = client_local_ips.get(sender, conn.getpeername()[0])
-                caller_udp = client_udp_ports.get(sender, "")
-                target_ip  = client_local_ips.get(target, clients[target].getpeername()[0])
-                target_udp = client_udp_ports.get(target, "")
+                caller_ip  =client_local_ips.get(sender, conn.getpeername()[0])
+                caller_udp =client_udp_ports.get(sender, "")
+                target_ip = client_local_ips.get(target, clients[target].getpeername()[0])
+                target_udp=client_udp_ports.get(target, "")
  
                 if not caller_udp or not target_udp:
                     send_message(conn, "CHAT/1.0", "500 ERROR", {"ERROR": "UDP port unknown for one or both peers."})
                     continue
  
-                send_message(
-                    clients[target], "POST", "/call",
-                    {"FROM": sender, "CALLER-IP": caller_ip, "CALLER-UDP": caller_udp}
-                )
-                send_message(
-                    conn, "CHAT/1.0", "200 OK",
-                    {"MESSAGE": "Call initiated.", "PEER-IP": target_ip, "PEER-UDP": target_udp}
-                )
+                send_message(clients[target], "POST", "/call",{"FROM": sender, "CALLER-IP": caller_ip, "CALLER-UDP": caller_udp})
+                send_message(conn, "CHAT/1.0", "200 OK",{"MESSAGE": "Call initiated.", "PEER-IP": target_ip, "PEER-UDP": target_udp})
  
             elif path == "/call-accept":
                 if target in clients:
                     accepter_ip  = client_local_ips.get(sender, conn.getpeername()[0])
                     accepter_udp = client_udp_ports.get(sender, "")
-                    send_message(
-                        clients[target], "POST", "/call-accept",
-                        {"FROM": sender, "PEER-IP": accepter_ip, "PEER-UDP": accepter_udp}
-                    )
+                    send_message(clients[target], "POST", "/call-accept",{"FROM": sender, "PEER-IP": accepter_ip, "PEER-UDP": accepter_udp})
                 send_message(conn, "CHAT/1.0", "200 OK", {"MESSAGE": "Acceptance forwarded."})
  
             elif path == "/endcall":
@@ -221,6 +191,7 @@ def handle_client(conn, addr):
         conn.close()
 
 
+# main server launch --  use start()
 def start():
     server.listen()
     print(f"[LISTENING] SERVER IS LISTENING ON {SERVER}")
