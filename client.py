@@ -1,6 +1,7 @@
-# CLIENT
-# TCP for all messaging, file transfer, and call signalling (via server)
-# UDP P2P for real-time audio during calls
+# CLIENT FILE
+# uses tcp for messaging, file transfer, call signalling for udp calls
+# uses udp for p2p audio calls 
+# requires pyaudio and python 3.10+
 
 import socket
 import threading
@@ -11,15 +12,12 @@ from protocol import (
     send_message, recv_message,
     build_audio_packet, parse_audio_packet
 )
-
-# ── Config ────────────────────────────────────────────────────────────────────
 PORT               = 5050
 SERVER             = "127.0.0.1"   # AWS server IP
 FORMAT             = 'utf-8'
 ADDR               = (SERVER, PORT)
 DISCONNECT_MESSAGE = "!DISCONNECT"
 
-# Audio settings (requires pyaudio — install with: pip install pyaudio)
 CHUNK       = 1024   # audio frames per UDP packet
 RATE        = 44100  # sample rate Hz
 CHANNELS    = 1      # mono
@@ -31,19 +29,19 @@ try:
     audio = pyaudio.PyAudio()
     AUDIO_AVAILABLE = True
 except ImportError:
-    print("[WARN] pyaudio not installed — audio calls unavailable. Run: pip install pyaudio")
+    print(" pyaudio not installed — audio calls unavailable. Run: pip3 install pyaudio")
     AUDIO_AVAILABLE = False
 
-# ── UDP socket (for audio P2P) ────────────────────────────────────────────────
+# udp socket for udp p2p audio calls
 udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 udp_sock.bind(('', 0))
 UDP_PORT = udp_sock.getsockname()[1]
 
-# ── TCP socket ────────────────────────────────────────────────────────────────
+# tcp socket
 client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 client.connect(ADDR)
 
-# ── Login / Register ──────────────────────────────────────────────────────────
+# login & register
 
 # get local IP by connecting a dummy UDP socket
 _tmp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -51,7 +49,6 @@ _tmp.connect(("8.8.8.8", 80))
 LOCAL_IP = _tmp.getsockname()[0]
 _tmp.close()
 
-print("Welcome to ChatApp!")
 print("  1. Login")
 print("  2. Register")
 choice = input("Choose (1 or 2): ").strip()
@@ -60,9 +57,8 @@ name     = input("Enter your username: ").lower().strip()
 password = input("Enter your password: ").strip()
 
 if choice == "2":
-    # Send register request, server adds user to DB and closes connection
-    send_message(client, "POST", "/register",
-                 {"ACTION": "register", "FROM": name, "PASSWORD": password})
+    # send register request then server adds user to DB and closes connection
+    send_message(client, "POST", "/register",{"ACTION": "register", "FROM": name, "PASSWORD": password})
     response = recv_message(client)
     status = response["path"]
     info   = response["headers"].get("ERROR") or response["headers"].get("MESSAGE", "")
@@ -70,16 +66,14 @@ if choice == "2":
     if "ERROR" in status:
         client.close()
         exit()
-    # Reconnect for actual login
+    # reconnect for actual login
     client.close()
     client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     client.connect(ADDR)
     print("Registered! Logging you in...")
 
-# Login (runs for both new registered users and existing users)
-send_message(client, "POST", "/login",
-             {"ACTION": "login", "FROM": name, "PASSWORD": password,
-              "UDP-PORT": UDP_PORT, "LOCAL-IP": LOCAL_IP})
+# login for both existing and new users
+send_message(client, "POST", "/login",{"ACTION": "login", "FROM": name, "PASSWORD": password,"UDP-PORT": UDP_PORT, "LOCAL-IP": LOCAL_IP})
 
 response = recv_message(client)
 status   = response["path"]
@@ -92,7 +86,7 @@ if "ERROR" in status:
 
 joined_groups = set()
 
-# Call state
+# call state
 in_call        = False
 call_peer_addr = None   # (ip, udp_port) of the other side
 call_stop      = threading.Event()
@@ -100,8 +94,7 @@ pending_call   = None   # (caller, caller_ip, caller_udp) of an incoming call
 pending_history = None
 
 
-# ── FILE TRANSFER (TCP via server) ────────────────────────────────────────────
-
+# file transfer- tcpvia server
 def tcp_send_file(target, filepath):
     if not os.path.exists(filepath):
         print(f"[FILE] File not found: {filepath}")
@@ -110,8 +103,8 @@ def tcp_send_file(target, filepath):
     with open(filepath, "rb") as f:
         data = f.read()
     print(f"[FILE] Sending '{filename}' to {target} ({len(data)} bytes)...")
-    send_message(client, "POST", "/file",
-                 {"FROM": name, "TARGET": target, "FILE-NAME": filename}, data)
+    send_message(client, "POST", "/file",{"FROM": name, "TARGET": target, "FILE-NAME": filename}, data)
+
     print(f"[FILE] Sent '{filename}' to {target}.")
 
 
@@ -125,12 +118,11 @@ def handle_incoming_file(msg):
     print(f"[FILE] Received '{filename}' from {sender} — saved as '{save_path}'.")
 
 
-# ── AUDIO CALL (UDP P2P) ──────────────────────────────────────────────────────
+# udp p2p audio call
 
 def audio_send_loop(peer_ip, peer_udp):
-    """Capture mic and stream audio chunks via UDP directly to peer."""
-    stream = audio.open(format=AUDIO_FMT, channels=CHANNELS,
-                        rate=RATE, input=True, frames_per_buffer=CHUNK)
+    # capture mic input and stream audio chunks directly through udp to peer
+    stream = audio.open(format=AUDIO_FMT, channels=CHANNELS,rate=RATE, input=True, frames_per_buffer=CHUNK)
     seq = 0
     print("[CALL] Streaming audio...")
     while not call_stop.is_set():
@@ -146,9 +138,8 @@ def audio_send_loop(peer_ip, peer_udp):
 
 
 def audio_recv_loop():
-    """Receive UDP audio chunks from peer and play them."""
-    stream = audio.open(format=AUDIO_FMT, channels=CHANNELS,
-                        rate=RATE, output=True, frames_per_buffer=CHUNK)
+    # recieve audio chunks from peer + play them
+    stream = audio.open(format=AUDIO_FMT, channels=CHANNELS,rate=RATE, output=True, frames_per_buffer=CHUNK)
     udp_sock.settimeout(1.0)
     print("[CALL] Receiving audio...")
     while not call_stop.is_set():
@@ -167,7 +158,7 @@ def audio_recv_loop():
 
 
 def start_audio_call(peer_ip, peer_udp):
-    """Start send and receive threads for the audio call."""
+    # start and send and recieve threads for the audio call
     global in_call, call_peer_addr
     in_call        = True
     call_peer_addr = (peer_ip, peer_udp)
@@ -177,15 +168,14 @@ def start_audio_call(peer_ip, peer_udp):
 
 
 def end_audio_call():
-    """Stop audio threads."""
+    #when called stop the audio threads incoming
     global in_call, call_peer_addr
     call_stop.set()
     in_call        = False
     call_peer_addr = None
     print("[CALL] Call ended.")
 
-# ── ADDITION: History helpers (called by UI when contact is clicked) ──────────
- 
+# ADDITION history recovery 
 def load_conversation(target):
     global pending_history
     pending_history = f"dm:{target}"
@@ -203,7 +193,7 @@ def load_recent_contacts():
     pending_history = "contacts"
     send_message(client, "POST", "/contacts", {"FROM": name})
 
-# ── TCP RECEIVE LOOP ──────────────────────────────────────────────────────────
+# recieve loop for TCP
 
 def receive():
     global pending_history, pending_call
@@ -221,7 +211,7 @@ def receive():
 
             if method == "CHAT/1.0":
 
-                # History / contacts response
+                # history and contact response
                 if pending_history and "200" in path:
                     raw = body.decode(FORMAT) if isinstance(body, bytes) else body
 
@@ -254,7 +244,7 @@ def receive():
 
                     pending_history = None
 
-                # Call connected
+                # call connected
                 elif "PEER-IP" in headers and "PEER-UDP" in headers and not in_call:
                     peer_ip  = headers["PEER-IP"]
                     peer_udp = int(headers["PEER-UDP"])
@@ -262,7 +252,7 @@ def receive():
                     if AUDIO_AVAILABLE:
                         start_audio_call(peer_ip, peer_udp)
 
-                # Only print errors, suppress delivery confirmations
+                # only print errors, suppress delivery confirmations
                 else:
                     info = headers.get("ERROR", "")
                     if info:
@@ -303,8 +293,8 @@ def receive():
 
 threading.Thread(target=receive, daemon=True).start()
 
-# ── COMMAND INTERFACE ─────────────────────────────────────────────────────────
-
+#command interface for user readability
+# for terminal use only, alternatively use gui.py, no need for these commands then 
 print("\nCommands:")
 print("  /join groupname           --- join or create a group")
 print("  /leave groupname          --- leave a group")
@@ -397,11 +387,9 @@ while True:
         target, content = msg.split(": ", 1)
         target = target.strip().lower()
         if target in joined_groups:
-            send_message(client, "POST", "/group-message",
-                         {"FROM": name, "TARGET": target, "CONTENT-TYPE": "text"}, content)
+            send_message(client, "POST", "/group-message",{"FROM": name, "TARGET": target, "CONTENT-TYPE": "text"}, content)
         else:
-            send_message(client, "POST", "/message",
-                         {"FROM": name, "TARGET": target, "CONTENT-TYPE": "text"}, content)
+            send_message(client, "POST", "/message",{"FROM": name, "TARGET": target, "CONTENT-TYPE": "text"}, content)
 
     else:
         print("Format:  username: message   or   groupname: message")
