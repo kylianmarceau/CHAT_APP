@@ -43,9 +43,7 @@ UDP_PORT = udp_sock.getsockname()[1]
 client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 client.connect(ADDR)
 
-# ── Login ─────────────────────────────────────────────────────────────────────
-name     = input("Enter your username: ").lower()
-password = input("Enter your password: ")
+# ── Login / Register ──────────────────────────────────────────────────────────
 
 # get local IP by connecting a dummy UDP socket
 _tmp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -53,7 +51,35 @@ _tmp.connect(("8.8.8.8", 80))
 LOCAL_IP = _tmp.getsockname()[0]
 _tmp.close()
 
-send_message(client, "POST", "/login", {"FROM": name, "PASSWORD": password, "UDP-PORT": UDP_PORT, "LOCAL-IP": LOCAL_IP})
+print("Welcome to ChatApp!")
+print("  1. Login")
+print("  2. Register")
+choice = input("Choose (1 or 2): ").strip()
+
+name     = input("Enter your username: ").lower().strip()
+password = input("Enter your password: ").strip()
+
+if choice == "2":
+    # Send register request, server adds user to DB and closes connection
+    send_message(client, "POST", "/register",
+                 {"ACTION": "register", "FROM": name, "PASSWORD": password})
+    response = recv_message(client)
+    status = response["path"]
+    info   = response["headers"].get("ERROR") or response["headers"].get("MESSAGE", "")
+    print(f"[Server]: {info}")
+    if "ERROR" in status:
+        client.close()
+        exit()
+    # Reconnect for actual login
+    client.close()
+    client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    client.connect(ADDR)
+    print("Registered! Logging you in...")
+
+# Login (runs for both new registered users and existing users)
+send_message(client, "POST", "/login",
+             {"ACTION": "login", "FROM": name, "PASSWORD": password,
+              "UDP-PORT": UDP_PORT, "LOCAL-IP": LOCAL_IP})
 
 response = recv_message(client)
 status   = response["path"]

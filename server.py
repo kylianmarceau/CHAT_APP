@@ -5,7 +5,8 @@ import socket
 import threading
 import json
 from protocol import send_message, recv_message
-from database import init_db, check_user, save_message, get_conversation, get_recent_contacts, get_group_conversation
+from database import init_db, check_user, save_message, get_conversation, get_recent_contacts, get_group_conversation, add_user
+
 
 HEADER = 64
 PORT = 5050
@@ -28,10 +29,21 @@ def handle_client(conn, addr):
     name = None
     try:
         # ── Authentication ────────────────────────────────────────────────────
-        msg      = recv_message(conn)
-        name     = msg["headers"].get("FROM", "").lower()
+        msg    = recv_message(conn)
+        action = msg["headers"].get("ACTION", "login")
+        name   = msg["headers"].get("FROM", "").lower()
         password = msg["headers"].get("PASSWORD", "")
- 
+
+        if action == "register":
+            success = add_user(name, password)
+            if success:
+                send_message(conn, "CHAT/1.0", "200 OK", {"MESSAGE": "Account created! You can now log in."})
+            else:
+                send_message(conn, "CHAT/1.0", "409 ERROR", {"ERROR": "Username already taken."})
+            conn.close()
+            return
+
+        # Otherwise it's a login
         result = check_user(name, password)
         if result == "not_found":
             send_message(conn, "CHAT/1.0", "401 ERROR", {"ERROR": "Username incorrect."})
@@ -45,13 +57,15 @@ def handle_client(conn, addr):
             send_message(conn, "CHAT/1.0", "409 ERROR", {"ERROR": "User already logged in."})
             conn.close()
             return
- 
+
         clients[name]          = conn
         client_udp_ports[name] = msg["headers"].get("UDP-PORT", "")
         client_local_ips[name] = msg["headers"].get("LOCAL-IP", conn.getpeername()[0])
         print(f"[+] {name} connected from {addr}")
         send_message(conn, "CHAT/1.0", "200 OK", {"MESSAGE": f"Welcome {name}! Login successful."})
- 
+        
+        # ── Main message loop ─────────────────────────────────────────────────
+        
         # ── Main message loop ─────────────────────────────────────────────────
         while True:
             msg = recv_message(conn)
