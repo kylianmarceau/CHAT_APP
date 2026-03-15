@@ -8,12 +8,9 @@ import threading
 import os
 import json
 
-from protocol import (
-    send_message, recv_message,
-    build_audio_packet, parse_audio_packet
-)
+from protocol import (send_message, recv_message,build_audio_packet, parse_audio_packet)
 PORT               = 5050
-SERVER             = "127.0.0.1"   # AWS server IP
+SERVER             = "13.49.137.214"   # AWS server IP
 FORMAT             = 'utf-8'
 ADDR               = (SERVER, PORT)
 DISCONNECT_MESSAGE = "!DISCONNECT"
@@ -121,8 +118,14 @@ def handle_incoming_file(msg):
 # udp p2p audio call
 
 def audio_send_loop(peer_ip, peer_udp):
-    # capture mic input and stream audio chunks directly through udp to peer
-    stream = audio.open(format=AUDIO_FMT, channels=CHANNELS,rate=RATE, input=True, frames_per_buffer=CHUNK)
+    stream = audio.open(format=AUDIO_FMT, channels=CHANNELS, rate=RATE,
+                        input=True, frames_per_buffer=CHUNK)
+    
+    # call delay fix buffer
+    flush_chunks = int(RATE / CHUNK * 0.5)  # discard ~0.5s of buffered input
+    for _ in range(flush_chunks):
+        stream.read(CHUNK, exception_on_overflow=False)
+
     seq = 0
     print("[CALL] Streaming audio...")
     while not call_stop.is_set():
