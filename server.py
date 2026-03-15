@@ -27,32 +27,7 @@ groups           = {}
 
 def handle_client(conn, addr):
     """relays all requests coming from clients and reponds accordly"""
-    """
-    handles all the communication with a single connected client.
- 
-    unction runs in its own thread for every client connection.
-    It first authenticates the client with register or login, then enters
-    a message loop that processes all incoming requests until the client
-    disconnects or logs out.
- 
-    The routing logic maps incoming POST paths to the appropriate handler:
-        /message       — direct message to another user
-        /file          — binary file transfer to another user
-        /join          — join or create a group
-        /leave         — leave a group
-        /group-message — send a message to all members of a group
-        /history       — retrieve DM history with another user
-        /group-history — retrieve message history for a group
-        /contacts      — retrieve the user's recent contact list
-        /call          — initiate a UDP audio call (signalling only)
-        /call-accept   — accept an incoming call (forwards UDP details)
-        /endcall       — end an active call
-        /logout        — clean disconnect
- 
-    Args:
-        conn (socket): The accepted TCP socket for this client.
-        addr (tuple):  The (ip, port) address of the connecting client.
-    """
+    
     name = None
     try:
         # auth
