@@ -1,26 +1,25 @@
-
 # PROTOCOL SPECIFICATION
+# TCP is used for all client-server communication text, files, signalling
+# UDP is used only for p2p audio calls
 
-FORMAT = 'utf-8'
+FORMAT = 'utf-8' #same format for decoding
 
 def build_message(method, path, headers={}, body=""):
-    
     if isinstance(body, str):
         body_bytes = body.encode(FORMAT)
     else:
-        body_bytes = body  # already bytes (for files/images)
+        body_bytes = body
 
     start_line = f"{method} {path} CHAT/1.0\r\n"
     headers["CONTENT-LENGTH"] = len(body_bytes)
 
     header_lines = "".join(f"{k}: {v}\r\n" for k, v in headers.items())
     head = (start_line + header_lines + "\r\n").encode(FORMAT)
-
+  
     return head + body_bytes
 
 
 def parse_message(raw_bytes):
-    
     if b"\r\n\r\n" in raw_bytes:
         head, body = raw_bytes.split(b"\r\n\r\n", 1)
     else:
@@ -39,7 +38,7 @@ def parse_message(raw_bytes):
     content_length = int(headers.get("CONTENT-LENGTH", 0))
     body = body[:content_length]
 
-    return {"method": start_line[0] if len(start_line) > 1 else "","path": start_line[1] if len(start_line) > 1 else start_line[0],"headers": headers,"body": body}
+    return {"method":  start_line[0] if len(start_line) > 1 else "","path":    start_line[1] if len(start_line) > 1 else start_line[0],"headers": headers,"body":    body}
 
 
 def send_message(sock, method, path, headers={}, body=""):
@@ -54,7 +53,6 @@ def recv_message(sock):
         return None
     total = int(raw_len.decode(FORMAT).strip())
 
-    # read specified byte amount
     data = b""
     while len(data) < total:
         chunk = sock.recv(total - len(data))
@@ -64,3 +62,21 @@ def recv_message(sock):
 
     return parse_message(data)
 
+def build_audio_packet(sender, seq, chunk):
+    #build the udp packet carrying 1 raw audio chunk
+    header = (f"SENDER: {sender}\r\n"f"SEQ: {seq}\r\n"f"LENGTH: {len(chunk)}\r\n"f"\r\n").encode(FORMAT)#
+    return header + chunk
+
+# addition for audio call
+def parse_audio_packet(data):
+    #parse incommign udp audio packets returns the dictionary or None if a failure occurs
+    if b"\r\n\r\n" not in data:
+        return None
+    head, chunk = data.split(b"\r\n\r\n", 1)
+    headers = {}
+    for line in head.decode(FORMAT).split("\r\n"):
+        if ": " in line:
+            k, v = line.split(": ", 1)
+            headers[k.upper()] = v
+    length = int(headers.get("LENGTH", 0))
+    return {"sender": headers.get("SENDER"),"seq":    int(headers.get("SEQ", 0)),"chunk":  chunk[:length]}
