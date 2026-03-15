@@ -303,7 +303,7 @@ class ChatApp(tk.Tk):
         self.pending_call = None; self.in_call = False
         self.call_peer = None; self.call_stop = threading.Event()
 
-        self.title("Instagram")
+        self.title("CHATAPP")
         sh = self.winfo_screenheight()
         self.H = int(sh * 0.82); self.W = int(self.H * 9 / 16)
         self.geometry(f"{self.W}x{self.H}")
@@ -450,7 +450,7 @@ class ChatApp(tk.Tk):
             tk.Label(meta, text=", ".join(members) if members else "Tap to add members", font=F(11), fg=TEXT_SUB, bg=BG).pack(anchor="w")
         else:
             online = self.contacts.get(chat_name,{}).get("online",False)
-            tk.Label(meta, text="Active now" if online else "Instagram", font=F(11), fg=TEXT_SUB, bg=BG).pack(anchor="w")
+            tk.Label(meta, text="Active now" if online else "CHAT", font=F(11), fg=TEXT_SUB, bg=BG).pack(anchor="w")
 
         act = tk.Frame(top, bg=BG); act.pack(side="right", padx=16)
         if is_grp:
