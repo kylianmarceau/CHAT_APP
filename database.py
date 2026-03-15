@@ -20,7 +20,7 @@ DB_PATH = "chatapp_data.json"
 # main read/write functionality
 
 def load_db():
-    # read the full json file and return all data
+    """read the full json file and return all data"""
     
     if not os.path.exists(DB_PATH):
         return {"users": {}, "messages": []}
@@ -29,13 +29,13 @@ def load_db():
 
 
 def save_db(data):
-    # write the data dictionary back to the json file(ie for newly registered users)
+    """ write the data dictionary back to the json file(ie for newly registered users)"""
     with open(DB_PATH, "w") as f:
         json.dump(data, f, indent=2)
 
 
 def init_db():
-    # cerate the json file (empty structure if it doesnt exist yet)
+    """cerate the json file (empty structure if it doesnt exist yet)"""
     if not os.path.exists(DB_PATH):
         save_db({"users": {}, "messages": []})
         print("[DB] Database created.")
@@ -44,15 +44,16 @@ def init_db():
 
 
 # hash password
-# use SHA-256 hashing algorithm to securely store passwords
 def hash_password(password):
+    """ use SHA-256 hashing algorithm to securely store passwords"""
+
     return hashlib.sha256(password.encode()).hexdigest()
 
 
 # functions for users
 
 def add_user(username, password):
-    # register a new user, return true if success and false if username is taken
+    """register a new user, return true if success and false if username is taken"""
     data = load_db()
     if username.lower() in data["users"]:
         return False
@@ -63,8 +64,8 @@ def add_user(username, password):
 
 def check_user(username, password):
   
-    # check credentials for login check database 
-    # returns 'ok' is correct, 'wrong_pass' for wrong password, 'not_found' for wrong usernames
+    """check credentials for login check database 
+    returns 'ok' is correct, 'wrong_pass' for wrong password, 'not_found' for wrong usernames"""
     data = load_db()
     username = username.lower()
     if username not in data["users"]:
@@ -75,15 +76,15 @@ def check_user(username, password):
 
 
 def get_all_users():
-    # get list of all usernames to print 
+    """ get list of all usernames to print """
     data = load_db()
     return list(data["users"].keys())
 
 
 def save_message(sender, target, content, msg_type="text"):
  
-    # add message to message list in the json file
-    #called by server.py every time a message is send between clients or on a group
+    """add message to message list in the json file
+        called by server.py every time a message is send between clients or on a group"""
     data = load_db()
     data["messages"].append({
         "sender":   sender.lower(),
@@ -97,7 +98,7 @@ def save_message(sender, target, content, msg_type="text"):
 
 def get_conversation(user_a, user_b, limit=50):
     
-    #load the chat history between 2 clients or group when clicked on contact to message
+    """load the chat history between 2 clients or group when clicked on contact to message"""
     data   = load_db()
     user_a = user_a.lower()
     user_b = user_b.lower()
@@ -116,7 +117,7 @@ def get_conversation(user_a, user_b, limit=50):
 
 
 def get_group_conversation(group_name, limit=50):
-    #load the chat history between 2 clients or group when clicked on contact to message
+    """load the chat history between 2 clients or group when clicked on contact to message"""
     data       = load_db()
     group_name = group_name.lower()
 
@@ -130,11 +131,11 @@ def get_group_conversation(group_name, limit=50):
 
 
 def get_recent_contacts(username, limit=20):
-    # return list of users that username recently chatted with
-    # used to fill in side bar on gui addition to not be empty space, like whatsapp
+    """ return list of users that username recently chatted with
+     used to fill in side bar on gui addition to not be empty space, like whatsapp"""
     data     = load_db()
     username = username.lower()
-    seen     = {}   # contact -> most recent sent_at
+    seen     = {}   # contact is most recent sent_at
 
     for m in data["messages"]:
         if m["msg_type"] != "text":

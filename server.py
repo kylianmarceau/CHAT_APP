@@ -26,6 +26,7 @@ groups           = {}
 
 
 def handle_client(conn, addr):
+    """relays all requests coming from clients and reponds accordly"""
     name = None
     try:
         # auth

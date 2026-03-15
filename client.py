@@ -141,7 +141,7 @@ def audio_send_loop(peer_ip, peer_udp):
 
 
 def audio_recv_loop():
-    # recieve audio chunks from peer + play them
+    """ recieve audio chunks from peer + play them"""
     stream = audio.open(format=AUDIO_FMT, channels=CHANNELS,rate=RATE, output=True, frames_per_buffer=CHUNK)
     udp_sock.settimeout(1.0)
     print("[CALL] Receiving audio...")
@@ -161,7 +161,7 @@ def audio_recv_loop():
 
 
 def start_audio_call(peer_ip, peer_udp):
-    # start and send and recieve threads for the audio call
+    """ start and send and recieve threads for the audio call """
     global in_call, call_peer_addr
     in_call        = True
     call_peer_addr = (peer_ip, peer_udp)
@@ -171,7 +171,7 @@ def start_audio_call(peer_ip, peer_udp):
 
 
 def end_audio_call():
-    #when called stop the audio threads incoming
+    """when called stop the audio threads incoming"""
     global in_call, call_peer_addr
     call_stop.set()
     in_call        = False
@@ -350,8 +350,7 @@ while True:
             print("Usage: /file username filepath")
         else:
             target, filepath = parts
-            threading.Thread(target=tcp_send_file,
-                             args=(target.lower(), filepath.strip()), daemon=True).start()
+            threading.Thread(target=tcp_send_file,args=(target.lower(), filepath.strip()), daemon=True).start()
 
     elif msg.startswith("/call "):
         target = msg[6:].strip().lower()
